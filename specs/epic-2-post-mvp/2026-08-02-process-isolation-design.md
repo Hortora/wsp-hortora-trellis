@@ -345,7 +345,10 @@ cycle (5s), making replay unnecessary for a local sidecar.
 - No top-level `/api/agents` resource — agents exist only within terminals
 - All agent operations return the updated `AgentSnapshot` for immediate UI
   refresh without waiting for monitor poll
-- `POST /api/terminals` body gains an optional `command` field for auto-start
+- `POST /api/terminals` body gains an optional `StartAgentRequest` for auto-start
+- **Network binding:** `quarkus.http.host=localhost` — the sidecar manages local
+  tmux sessions and has no authentication layer; binding to all interfaces would
+  expose the control API to the network
 
 ### Error Responses
 
