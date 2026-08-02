@@ -233,9 +233,16 @@ record StartAgentRequest(
 )
 ```
 
-The sidecar constructs the exact shell command. This eliminates command
-injection — the sidecar never sends arbitrary user-supplied text to the
-terminal via lifecycle operations.
+The sidecar constructs the exact shell command. The `prompt` value is
+embedded using POSIX single-quote escaping: wrap in single quotes, escape
+internal single quotes as `'\''`. Example: prompt `Fix the "login" bug`
+→ `claude -p 'Fix the "login" bug'`; prompt `Fix the 'auth' flow`
+→ `claude -p 'Fix the '\''auth'\'' flow'`. Single quotes disable all
+shell metacharacter interpretation (`$`, backticks, `!`, `\`, `"`).
+
+This eliminates both command injection and correctness issues — the sidecar
+never sends unescaped user-supplied text to the terminal via lifecycle
+operations.
 
 **Validation:** `resume` and `prompt` are mutually exclusive. Setting both
 is a 400 Bad Request — you cannot continue an existing session and provide
@@ -272,7 +279,7 @@ creation. Default: no auto-start (IDLE).
 
 `TerminalRegistry.destroyTerminal()` coordinates the full teardown sequence:
 
-1. Call `agentProcessManager.stopAgent()` if agent is RUNNING
+1. Call `agentProcessManager.stopAgent()` if agent is RUNNING or STARTING
 2. Call `agentProcessManager.clearState()` to remove process state (handles PAUSED)
 3. Call `tmuxManager.killSession()` to destroy the tmux session
 4. Remove terminal from the registry map
