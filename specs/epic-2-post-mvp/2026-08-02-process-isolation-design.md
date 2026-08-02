@@ -30,6 +30,9 @@ Industry consensus and Claude Code's own terminology drive the naming:
 - REST: `/api/sessions` → `/api/terminals`
 - Frontend interfaces and component props updated accordingly
 
+**Current state:** The rename is partially started — `TerminalResource.java` exists
+but still has `@Path("/api/sessions")`. This spec completes the rename.
+
 ## Architecture: Hybrid Process Management
 
 Combines auto-start (immediate PID awareness when creating terminals) with
@@ -40,7 +43,7 @@ periodic discovery (self-healing, handles manual starts and crashes).
 | Layer | What | Component |
 |-------|------|-----------|
 | I/O transport | tmux session | `TmuxManager` (existing, renamed methods) |
-| OS process | Claude CLI with PID/memory | `ProcessMonitor` + `AgentLifecycleManager` (new) |
+| OS process | Claude CLI with PID/memory | `AgentProcessManager` (new) |
 | LLM conversation | Programmatic agent turns | `AgentProvider` / `AgentSession` (existing platform API, used by coordinator) |
 
 Issue #20 fills the OS process layer. It is independent of the platform
@@ -51,14 +54,13 @@ Issue #20 fills the OS process layer. It is independent of the platform
 ### Renamed Types
 
 ```java
-// Was: SessionInfo
+// Was: SessionInfo — pure terminal descriptor, no agent state
 record TerminalInfo(
     String name,
     String workingDir,
     String slot,
     String repo,
-    String issue,
-    AgentState agentState   // denormalized for quick list queries
+    String issue
 )
 ```
 
@@ -83,9 +85,24 @@ record AgentSnapshot(
 )
 ```
 
-## §2 Process Discovery & Monitoring
+## §2 Agent Process Management
 
-`ProcessMonitor` — `@ApplicationScoped` scheduled service. Runs every 5 seconds.
+**Package:** `io.hortora.trellis.agent`
+
+New types (`AgentState`, `AgentProcess`, `AgentSnapshot`) and the unified
+`AgentProcessManager` live in `io.hortora.trellis.agent` — distinct from
+`terminal` (I/O transport) and `lifecycle` (work/branch operations).
+
+`AgentProcessManager` — `@ApplicationScoped` service that owns both discovery
+(scheduled polling) and control (start/stop/pause/resume). A single component
+because monitoring and lifecycle operations share mutable state: the monitor
+must respect lifecycle invariants (PAUSED), and lifecycle operations need PID
+data from monitoring. Splitting them across classes adds coordination overhead
+without architectural clarity.
+
+### Process Discovery
+
+Scheduled poll every 5 seconds.
 
 ### Discovery Mechanism
 
@@ -120,15 +137,12 @@ runs.
 
 ### State Storage
 
-- `ConcurrentHashMap<String, AgentProcess>` inside `ProcessMonitor`, keyed by terminal name
-- `TerminalRegistry` updated with denormalized `agentState` on each change
-- SSE endpoint emits `AgentSnapshot` on state changes
+- `ConcurrentHashMap<String, AgentProcess>` inside `AgentProcessManager`, keyed by terminal name
+- State is authoritative in this single location — no denormalization into `TerminalInfo`
+- On state changes, publishes to push topic `agent:state` via `TopicRegistry`
+- `AgentSnapshot` composed at API response time from `TerminalInfo` + `AgentProcess`
 
-## §3 Agent Lifecycle Operations
-
-`AgentLifecycleManager` — `@ApplicationScoped` service.
-
-### Operations
+### Lifecycle Operations
 
 | Operation | Action | State Transition |
 |-----------|--------|-----------------|
@@ -138,12 +152,28 @@ runs.
 | `resumeAgent(terminal)` | `tmux send-keys -t <name> 'claude -c' Enter` | PAUSED → STARTING → RUNNING |
 | `refreshAgent(terminal)` | stop + start with `claude -c` | RUNNING → STARTING → RUNNING |
 
+All methods are on `AgentProcessManager`. The same component owns both the
+scheduled poll and the lifecycle operations — no cross-component state sharing.
+
 ### Auto-Start on Terminal Creation
 
 `TerminalRegistry.createTerminal()` accepts an optional `command` parameter.
-If provided, calls `agentLifecycleManager.startAgent()` after tmux session
+If provided, calls `agentProcessManager.startAgent()` after tmux session
 creation. Default: no auto-start (IDLE). Caller decides the command
 (`claude`, `claude -c`, `claude -p "..."`).
+
+### Terminal Destruction Coordination
+
+`TerminalRegistry.destroyTerminal()` coordinates the full teardown sequence:
+
+1. Call `agentProcessManager.stopAgent()` if agent is RUNNING
+2. Call `agentProcessManager.clearState()` to remove process state (handles PAUSED)
+3. Call `tmuxManager.killSession()` to destroy the tmux session
+4. Remove terminal from the registry map
+
+This mirrors the creation path where `TerminalRegistry.createTerminal()` already
+calls `agentProcessManager.startAgent()`. The registry owns terminal lifecycle;
+the process manager owns agent process lifecycle. The registry coordinates both.
 
 ### Kill Semantics
 
@@ -155,7 +185,8 @@ creation. Default: no auto-start (IDLE). Caller decides the command
 ### Concurrency Control
 
 Per-terminal `ReentrantLock` prevents concurrent lifecycle operations on the
-same terminal. Same pattern as existing `LifecycleManager.withLock()`.
+same terminal. Same locking pattern as `LifecycleManager.withLock()` in
+`io.hortora.trellis.lifecycle` (work/branch lifecycle — a separate domain).
 
 ## §4 REST API
 
@@ -168,32 +199,42 @@ POST   /api/terminals              → create terminal (optional auto-start)
 DELETE /api/terminals/{name}       → destroy terminal (kills agent if running, clears PAUSED state)
 ```
 
-### New Agent Endpoints
+### Agent Sub-Resource Endpoints
+
+Agent operations are sub-resources of terminals — agents are always scoped
+to a terminal (1:1 containment), and the URL structure reflects this:
 
 ```
-POST   /api/agents/{terminalName}/start    → start Claude in terminal
-       body: { "command": "claude" }        (optional, defaults to "claude")
-POST   /api/agents/{terminalName}/stop     → stop Claude process
-POST   /api/agents/{terminalName}/pause    → kill Claude, mark PAUSED
-POST   /api/agents/{terminalName}/resume   → restart with claude -c
-POST   /api/agents/{terminalName}/refresh  → stop + restart with claude -c
-GET    /api/agents/{terminalName}/stats    → { pid, memoryBytes, uptime, state }
+POST   /api/terminals/{name}/agent/start    → start Claude in terminal
+       body: { "command": "claude" }         (optional, defaults to "claude")
+POST   /api/terminals/{name}/agent/stop     → stop Claude process
+POST   /api/terminals/{name}/agent/pause    → kill Claude, mark PAUSED
+POST   /api/terminals/{name}/agent/resume   → restart with claude -c
+POST   /api/terminals/{name}/agent/refresh  → stop + restart with claude -c
+GET    /api/terminals/{name}/agent/stats    → { pid, memoryBytes, uptime, state }
 ```
+
+Implemented as a JAX-RS sub-resource: `TerminalResource` delegates
+`/agent/*` paths to an `AgentSubResource` instance, keeping resource
+classes focused.
 
 ### Live Updates
 
-```
-GET    /api/agents/events                  → SSE stream of AgentSnapshot changes
-```
+Agent state changes use the existing push infrastructure at `/api/push`
+(topic-based SSE via `TopicRegistry` from `casehub-pages-push`):
 
-Emitted when ProcessMonitor detects state changes or memory crosses a
-threshold. Frontend subscribes on load for reactive updates.
+- Topic: `agent:state` — emits `AgentSnapshot` JSON on state changes
+- Topic: `agent:memory` — emits when memory crosses threshold
+
+The frontend already subscribes to `/api/push` for coordinator events
+(`coordinator:advice`, `coordinator:message`). Agent events are additional
+topics on the same connection — no second SSE endpoint needed.
 
 ### Design Decisions
 
 - `GET /api/terminals` returns `AgentSnapshot` (terminal + agent combined) —
   frontend doesn't need two calls
-- Agent endpoints keyed by terminal name (1:1 relationship)
+- No top-level `/api/agents` resource — agents exist only within terminals
 - All agent operations return the updated `AgentSnapshot` for immediate UI
   refresh without waiting for monitor poll
 - `POST /api/terminals` body gains an optional `command` field for auto-start
@@ -231,37 +272,37 @@ Each terminal entry shows:
 
 ### SSE Subscription
 
-App subscribes to `/api/agents/events` on load. Each event updates the
+App subscribes to `/api/push?topics=agent:state,agent:memory` on load (or
+adds these topics to an existing push connection). Each event updates the
 relevant terminal's agent state in-place. No full-page refresh.
 
 ## §6 Testing Strategy
 
 ### Unit Tests (no tmux required)
 
-- **`ProcessMonitorTest`** — mock `TmuxManager`, verify state transitions:
-  IDLE→RUNNING on Claude detection, RUNNING→IDLE on process disappearance,
-  PAUSED preserved across monitor cycles
-- **`AgentLifecycleManagerTest`** — mock `TmuxManager` + `ProcessMonitor`,
-  verify: start sends correct command, stop kills correct PID, refresh
-  sequences stop→start, concurrent operations rejected
+- **`AgentProcessManagerTest`** — mock `TmuxManager`, verify:
+  - State transitions: IDLE→RUNNING on Claude detection, RUNNING→IDLE on
+    process disappearance, PAUSED preserved across monitor cycles
+  - Lifecycle operations: start sends correct command, stop kills correct PID,
+    refresh sequences stop→start, concurrent operations rejected
 - **`AgentProcessTest`** — verify process tree RSS summation with canned
   `ps` output. Edge cases: no children, deep tree, zombie processes
 
 ### Integration Tests (require tmux — `assumeTrue` guard)
 
 - **`TerminalRegistryTest`** — renamed from `SessionRegistryTest`, same
-  coverage, verify renamed API
-- **`ProcessMonitorIntegrationTest`** — real tmux session with a
+  coverage, verify renamed API, verify destruction coordination (agent
+  cleanup before tmux kill)
+- **`AgentProcessManagerIntegrationTest`** — real tmux session with a
   long-running process, verify discovery and RSS reporting, verify IDLE
-  detection on process exit
-- **`AgentLifecycleIntegrationTest`** — full start→running→pause→resume→stop
-  cycle with a mock agent script
+  detection on process exit, full start→running→pause→resume→stop cycle
+  with a mock agent script
 
 ### REST Endpoint Tests (`@QuarkusTest`)
 
-- **`AgentResourceTest`** — all endpoints: start/stop/pause/resume/refresh
-  return correct snapshots, 404 for invalid terminal, 409 for concurrent ops
-- **`TerminalResourceTest`** — renamed paths, `AgentSnapshot` response shape
+- **`TerminalResourceTest`** — renamed paths, `AgentSnapshot` response shape,
+  agent sub-resource operations: start/stop/pause/resume/refresh return
+  correct snapshots, 404 for invalid terminal, 409 for concurrent ops
 
 ### Frontend
 
