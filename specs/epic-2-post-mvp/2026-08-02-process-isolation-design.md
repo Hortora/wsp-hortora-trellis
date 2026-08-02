@@ -88,9 +88,9 @@ record TerminalInfo(
 enum AgentState { IDLE, STARTING, RUNNING, PAUSED }
 
 record AgentProcess(
-    long pid,
+    long pid,               // 0 when PAUSED (process killed)
     AgentState state,
-    long memoryBytes,       // process tree RSS
+    long memoryBytes,       // process tree RSS; 0 when PAUSED
     Instant startedAt,
     String command
 )
@@ -100,7 +100,7 @@ record AgentSnapshot(
     String terminalName,
     TerminalInfo terminal,
     AgentProcess process,   // null when IDLE
-    String lastError        // set on STARTING→IDLE timeout, cleared on next start
+    String lastError        // set on STARTING→IDLE timeout or monitor-detected RUNNING→IDLE; cleared on next start
 )
 ```
 
@@ -130,7 +130,8 @@ For each registered terminal:
 1. `tmux display-message -t <name> -p '#{pane_pid}'` → shell PID
 2. `tmux display-message -t <name> -p '#{pane_current_command}'` → foreground command
 3. If command is a shell (`bash`/`zsh`/`sh`/`fish`/`dash`) → `IDLE`
-4. If command is `claude` or `node` → agent running; walk process tree for PID and RSS
+4. If command is `claude` or `node` → walk process tree for PID and RSS
+5. If the tree walk finds no process with `claude` in its args → `IDLE` (non-Claude Node.js process in terminal)
 
 Pattern proven by claudony's `StatusAwareExpiryPolicy`.
 
@@ -171,9 +172,11 @@ in the terminal).
 **Uncontrolled exit ambiguity:** The monitor cannot distinguish a Claude crash
 from a user typing `/exit` — both result in the process disappearing. Lifecycle
 operations (`stopAgent`, `pauseAgent`) set state directly and are unambiguous.
-The monitor-detected `RUNNING → IDLE` covers all uncontrolled exits. If
-crash-specific behavior (auto-restart, alerting) is needed later,
-`ProcessHandle.onExit()` could capture exit codes.
+The monitor-detected `RUNNING → IDLE` covers all uncontrolled exits and sets
+`lastError` to `"Agent process ended — check terminal for details"` as a
+breadcrumb for the user. If crash-specific behavior (auto-restart, alerting) is
+needed later, `ProcessHandle.onExit()` could capture exit codes and refine the
+`lastError` message accordingly.
 
 ### Bootstrap Initialization
 
@@ -216,12 +219,18 @@ monitor cycle after bootstrap completes is the authoritative initial state.
 |-----------|--------|-----------------|
 | `startAgent(terminal, opts)` | Construct command from `opts`, verify shell, send-keys | IDLE → STARTING → RUNNING |
 | `stopAgent(terminal)` | Tree-kill (§Kill Semantics), clear `@trellis_agent_state` | RUNNING → IDLE, STARTING → IDLE, PAUSED → IDLE |
-| `pauseAgent(terminal)` | Tree-kill, persist PAUSED via `@trellis_agent_state` | RUNNING → PAUSED |
+| `pauseAgent(terminal)` | Persist PAUSED via `@trellis_agent_state`, tree-kill (§Kill Semantics), zero `pid`/`memoryBytes` | RUNNING → PAUSED |
 | `resumeAgent(terminal)` | Clear `@trellis_agent_state`, verify shell, send-keys `claude -c` | PAUSED → STARTING → RUNNING |
 | `refreshAgent(terminal)` | Set STARTING → tree-kill → wait → send `claude -c` | RUNNING → STARTING → RUNNING |
 
 All methods are on `AgentProcessManager`. The same component owns both the
 scheduled poll and the lifecycle operations — no cross-component state sharing.
+
+**`stopAgent` from PAUSED:** When `stopAgent` is called on a terminal in PAUSED
+state, tree-kill is skipped (the process was already killed by `pauseAgent`).
+The operation clears `@trellis_agent_state` and sets the process to null (IDLE).
+This avoids acting on stale PIDs — on long-running systems, the original PID
+could be reused by an unrelated process.
 
 **Command construction:** `startAgent` does not accept a freeform command
 string. It accepts structured parameters:
@@ -307,6 +316,14 @@ Per-terminal `ReentrantLock` prevents concurrent lifecycle operations on the
 same terminal. Same locking pattern as `LifecycleManager.withLock()` in
 `io.hortora.trellis.lifecycle` (work/branch lifecycle — a separate domain).
 
+**Monitor/lifecycle coordination:** The scheduled monitor poll uses `tryLock`
+per terminal. If the lock is held by a lifecycle operation, the monitor skips
+that terminal for the current cycle. This prevents transient state races — e.g.,
+`pauseAgent` kills the process and the monitor observing the gap before PAUSED
+is set. At most one monitor cycle (5s) is delayed, which is invisible to users.
+The existing `refreshAgent` STARTING-before-kill optimization remains as
+defense-in-depth but is no longer the sole race prevention mechanism.
+
 ## §4 REST API
 
 ### Renamed Endpoints
@@ -391,6 +408,7 @@ can update its display without an additional GET.
 Each terminal entry shows:
 - Name and issue reference (existing)
 - State badge: `running` (green) · `paused` (amber) · `idle` (grey) · `starting` (blue pulse)
+- Error indicator: when `lastError` is non-null and state is IDLE, the state badge shows a warning icon with the error message as tooltip
 - Memory: `287 MB` — turns red when exceeding threshold (default 500 MB)
 - Contextual action buttons
 
