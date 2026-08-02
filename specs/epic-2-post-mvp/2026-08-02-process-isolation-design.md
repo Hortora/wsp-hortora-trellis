@@ -49,7 +49,7 @@ OS process lifecycle (issue #20's memory management). Slot pause/resume manages
 git workspace state (existing feature). Neither triggers the other.
 
 Coordination (e.g., slot pause auto-pausing its agents) is a future concern
-tracked in Hortora/trellis#21.
+tracked in Hortora/trellis#22.
 
 ## Architecture: Hybrid Process Management
 
@@ -136,10 +136,17 @@ Pattern proven by claudony's `StatusAwareExpiryPolicy`.
 
 ### Process Tree Walk (macOS)
 
-- `ps -eo pid=,ppid=,rss=` → build parent→children map (RSS in kilobytes on macOS; ×1024 for `memoryBytes`)
+- `ps -eo pid=,ppid=,rss=,args=` → build parent→children map (RSS in kilobytes on macOS; ×1024 for `memoryBytes`)
 - From `pane_pid`, recursively collect all descendants
-- Filter for Claude root (command contains `claude`)
+- Filter for Claude root (`args` contains `claude` — `comm` shows `node`, not
+  `claude`, because Claude Code is a Node.js application)
 - Sum RSS of Claude root + all children (MCP servers, subagents)
+
+**RSS overcounting:** RSS includes shared memory-mapped pages, counted once per
+process even when pages are physically shared (e.g. Node.js runtime shared by
+Claude and MCP servers). For a typical tree, RSS overreports by ~30-50%. The
+500 MB threshold is calibrated against RSS-reported values, not actual physical
+memory. Acceptable for a warning display — not used for automatic actions.
 
 ### State Transitions Detected by Monitor
 
@@ -149,10 +156,17 @@ Pattern proven by claudony's `StatusAwareExpiryPolicy`.
 | RUNNING | IDLE | Claude process gone without explicit pause (crash or user exit) |
 | STARTING | RUNNING | Claude process appears within 15s of start command |
 | STARTING | IDLE | 15s timeout — process never appeared (failed start) |
+| PAUSED | RUNNING | Claude process appears (manual start in paused terminal) |
 
-The `PAUSED` state is only set by explicit lifecycle operations, never by the
-monitor. This prevents a paused terminal from flipping to IDLE when the monitor
-runs.
+**STARTING protection:** The monitor MUST NOT transition from STARTING to any
+state other than RUNNING until the 15s timeout expires. If the monitor observes
+no Claude process while the terminal is in STARTING state and less than 15s
+have elapsed, it preserves STARTING.
+
+**PAUSED invariant:** The monitor never transitions a terminal TO PAUSED — only
+explicit lifecycle operations set PAUSED. The monitor MAY transition FROM PAUSED
+to RUNNING if a Claude process is detected (e.g. user manually started Claude
+in the terminal).
 
 **Uncontrolled exit ambiguity:** The monitor cannot distinguish a Claude crash
 from a user typing `/exit` — both result in the process disappearing. Lifecycle
@@ -177,18 +191,55 @@ false-negative that blocks no user action.
 - On state changes, publishes to push topic `agent:state` via `TopicRegistry`
 - `AgentSnapshot` composed at API response time from `TerminalInfo` + `AgentProcess`
 
+**PAUSED persistence:** PAUSED state is persisted as a tmux user option
+`@trellis_agent_state` on the terminal's tmux session. On `bootstrap()`,
+`AgentProcessManager` reads this option; if the value is `PAUSED`, the terminal
+is initialized in PAUSED state. This survives both sidecar and tmux server
+restarts, consistent with how terminal metadata (`@trellis_slot`,
+`@trellis_repo`, `@trellis_issue`) is already persisted and recovered.
+
+**Bootstrap ordering:** `AgentProcessManager` MUST NOT start its scheduled
+polling until `TerminalRegistry.bootstrap()` completes. Standard Quarkus
+lifecycle ordering via `@Observes StartupEvent` with `@Priority`. The first
+monitor cycle after bootstrap completes is the authoritative initial state.
+
 ### Lifecycle Operations
 
 | Operation | Action | State Transition |
 |-----------|--------|-----------------|
-| `startAgent(terminal, command)` | `tmux send-keys -t <name> '<command>' Enter` | IDLE → STARTING → RUNNING |
-| `stopAgent(terminal)` | `kill <pid>` (SIGTERM, SIGKILL after 5s) | RUNNING → IDLE |
-| `pauseAgent(terminal)` | Same as stop, marks PAUSED | RUNNING → PAUSED |
-| `resumeAgent(terminal)` | `tmux send-keys -t <name> 'claude -c' Enter` | PAUSED → STARTING → RUNNING |
-| `refreshAgent(terminal)` | stop + start with `claude -c` | RUNNING → STARTING → RUNNING |
+| `startAgent(terminal, opts)` | Construct command from `opts`, verify shell, send-keys | IDLE → STARTING → RUNNING |
+| `stopAgent(terminal)` | Tree-kill (§Kill Semantics) | RUNNING → IDLE |
+| `pauseAgent(terminal)` | Tree-kill, persist PAUSED via `@trellis_agent_state` | RUNNING → PAUSED |
+| `resumeAgent(terminal)` | Verify shell, `tmux send-keys 'claude -c' Enter` | PAUSED → STARTING → RUNNING |
+| `refreshAgent(terminal)` | Set STARTING → tree-kill → wait → send `claude -c` | RUNNING → STARTING → RUNNING |
 
 All methods are on `AgentProcessManager`. The same component owns both the
 scheduled poll and the lifecycle operations — no cross-component state sharing.
+
+**Command construction:** `startAgent` does not accept a freeform command
+string. It accepts structured parameters:
+
+```java
+record StartAgentRequest(
+    boolean resume,           // true → `claude -c`
+    String prompt             // optional → `claude -p "<prompt>"`
+)
+```
+
+The sidecar constructs the exact shell command. This eliminates command
+injection — the sidecar never sends arbitrary user-supplied text to the
+terminal via lifecycle operations.
+
+**Terminal state verification:** Before sending keys, lifecycle operations verify
+that `pane_current_command` is a shell (same shell command set as the monitor).
+If a non-shell process is in the foreground, the operation returns an error.
+After a kill operation, a 500ms delay is inserted before sending keys to allow
+the shell prompt to appear.
+
+**Refresh IDLE suppression:** `refreshAgent` sets the state to STARTING before
+killing the process. This prevents the monitor from observing a transient IDLE
+state between kill and restart. Sequence: set STARTING → tree-kill → wait for
+exit → 500ms delay → send `claude -c`. No intermediate IDLE event.
 
 **Resume/refresh always use `claude -c`:** This is intentional. The `-c` flag
 continues the most recent Claude session, restoring conversation history, model
@@ -199,10 +250,9 @@ state that `-c` restores.
 
 ### Auto-Start on Terminal Creation
 
-`TerminalRegistry.createTerminal()` accepts an optional `command` parameter.
+`TerminalRegistry.createTerminal()` accepts an optional `StartAgentRequest`.
 If provided, calls `agentProcessManager.startAgent()` after tmux session
-creation. Default: no auto-start (IDLE). Caller decides the command
-(`claude`, `claude -c`, `claude -p "..."`).
+creation. Default: no auto-start (IDLE).
 
 ### Terminal Destruction Coordination
 
@@ -219,10 +269,16 @@ the process manager owns agent process lifecycle. The registry coordinates both.
 
 ### Kill Semantics
 
-1. Send SIGTERM to Claude root PID
-2. Wait up to 5 seconds for exit
-3. If still alive, send SIGKILL to the entire process group
-4. Implemented via `ProcessHandle.of(pid)` (Java 9+ API)
+1. Build process tree from the Claude root PID (same tree walk as RSS summation)
+2. Send SIGTERM to the Claude root PID via `ProcessHandle.of(pid).destroy()`
+3. Wait up to 5 seconds for exit (monitor via `ProcessHandle.onExit()`)
+4. If still alive, kill all descendants leaf-first via
+   `ProcessHandle.of(childPid).destroyForcibly()`, then kill the root
+
+`ProcessHandle.destroyForcibly()` sends SIGKILL to a single process — Java's
+ProcessHandle API does not support process-group kills. The tree walk is the
+only reliable approach because child processes (MCP servers) may create their
+own process groups.
 
 ### Concurrency Control
 
@@ -249,7 +305,7 @@ to a terminal (1:1 containment), and the URL structure reflects this:
 
 ```
 POST   /api/terminals/{name}/agent/start    → start Claude in terminal
-       body: { "command": "claude" }         (optional, defaults to "claude")
+       body: { "resume": false, "prompt": "..." }  (both optional)
 POST   /api/terminals/{name}/agent/stop     → stop Claude process
 POST   /api/terminals/{name}/agent/pause    → kill Claude, mark PAUSED
 POST   /api/terminals/{name}/agent/resume   → restart with claude -c
@@ -266,12 +322,21 @@ classes focused.
 Agent state changes use the existing push infrastructure at `/api/push`
 (topic-based SSE via `TopicRegistry` from `casehub-pages-push`):
 
-- Topic: `agent:state` — emits `AgentSnapshot` JSON on state changes
+- Topic: `agent:state` — emits `AgentSnapshot` JSON on state changes and on
+  each monitor cycle (every 5s) for terminals with running/starting agents,
+  ensuring displayed memory values are always current
 - Topic: `agent:memory` — emits when memory crosses threshold
+
+**Initial state:** On subscription, the `agent:state` topic emits a full
+`AgentSnapshot` for every terminal — the subscriber starts with current state
+rather than needing a separate REST call.
 
 The frontend already subscribes to `/api/push` for coordinator events
 (`coordinator:advice`, `coordinator:message`). Agent events are additional
 topics on the same connection — no second SSE endpoint needed.
+
+No `Last-Event-ID` replay — state is eventually consistent within one monitor
+cycle (5s), making replay unnecessary for a local sidecar.
 
 ### Design Decisions
 
@@ -281,6 +346,18 @@ topics on the same connection — no second SSE endpoint needed.
 - All agent operations return the updated `AgentSnapshot` for immediate UI
   refresh without waiting for monitor poll
 - `POST /api/terminals` body gains an optional `command` field for auto-start
+
+### Error Responses
+
+| Condition | HTTP Status | Body |
+|-----------|------------|------|
+| Terminal not found | 404 | `{ "error": "terminal not found: <name>" }` |
+| Invalid state transition (e.g., stop when IDLE, resume when RUNNING) | 409 Conflict | `{ "error": "cannot <op> agent in state <current>", "state": "<current>" }` |
+| Concurrent lifecycle operation on same terminal | 409 Conflict | `{ "error": "operation already in progress for: <name>" }` |
+
+All agent operations return 409 for invalid state transitions rather than
+silently succeeding. The response includes the current state so the frontend
+can update its display without an additional GET.
 
 ## §5 Frontend
 
