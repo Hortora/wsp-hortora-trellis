@@ -215,7 +215,7 @@ monitor cycle after bootstrap completes is the authoritative initial state.
 | Operation | Action | State Transition |
 |-----------|--------|-----------------|
 | `startAgent(terminal, opts)` | Construct command from `opts`, verify shell, send-keys | IDLE → STARTING → RUNNING |
-| `stopAgent(terminal)` | Tree-kill (§Kill Semantics), clear `@trellis_agent_state` | RUNNING → IDLE, PAUSED → IDLE |
+| `stopAgent(terminal)` | Tree-kill (§Kill Semantics), clear `@trellis_agent_state` | RUNNING → IDLE, STARTING → IDLE, PAUSED → IDLE |
 | `pauseAgent(terminal)` | Tree-kill, persist PAUSED via `@trellis_agent_state` | RUNNING → PAUSED |
 | `resumeAgent(terminal)` | Clear `@trellis_agent_state`, verify shell, send-keys `claude -c` | PAUSED → STARTING → RUNNING |
 | `refreshAgent(terminal)` | Set STARTING → tree-kill → wait → send `claude -c` | RUNNING → STARTING → RUNNING |
