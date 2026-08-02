@@ -165,7 +165,7 @@ same terminal. Same pattern as existing `LifecycleManager.withLock()`.
 GET    /api/terminals              → List<AgentSnapshot>
 GET    /api/terminals/{name}       → AgentSnapshot
 POST   /api/terminals              → create terminal (optional auto-start)
-DELETE /api/terminals/{name}       → destroy terminal (kills agent if running)
+DELETE /api/terminals/{name}       → destroy terminal (kills agent if running, clears PAUSED state)
 ```
 
 ### New Agent Endpoints
