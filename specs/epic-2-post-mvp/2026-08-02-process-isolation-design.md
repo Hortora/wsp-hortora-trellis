@@ -33,6 +33,24 @@ Industry consensus and Claude Code's own terminology drive the naming:
 **Current state:** The rename is partially started — `TerminalResource.java` exists
 but still has `@Path("/api/sessions")`. This spec completes the rename.
 
+### Pause/Resume Disambiguation
+
+"Pause/resume" exists at two independent layers in trellis:
+
+| Operation | Component | What it does | API |
+|-----------|-----------|-------------|-----|
+| **Slot pause** | `LifecycleManager` | Commits WIP, pushes branches to stack — preserves git workspace | `POST /api/lifecycle/pause/{slotId}` |
+| **Slot resume** | `LifecycleManager` | Checks out branches, rebases, resets WIP — restores git workspace | `POST /api/lifecycle/resume/{slotId}` |
+| **Agent pause** | `AgentProcessManager` | Kills Claude process, marks PAUSED — frees memory | `POST /api/terminals/{name}/agent/pause` |
+| **Agent resume** | `AgentProcessManager` | Starts `claude -c` — continues conversation | `POST /api/terminals/{name}/agent/resume` |
+
+These are independent operations at different layers. Agent pause/resume manages
+OS process lifecycle (issue #20's memory management). Slot pause/resume manages
+git workspace state (existing feature). Neither triggers the other.
+
+Coordination (e.g., slot pause auto-pausing its agents) is a future concern
+tracked in Hortora/trellis#21.
+
 ## Architecture: Hybrid Process Management
 
 Combines auto-start (immediate PID awareness when creating terminals) with
@@ -81,7 +99,8 @@ record AgentProcess(
 record AgentSnapshot(
     String terminalName,
     TerminalInfo terminal,
-    AgentProcess process    // null when IDLE
+    AgentProcess process,   // null when IDLE
+    String lastError        // set on STARTING→IDLE timeout, cleared on next start
 )
 ```
 
@@ -117,7 +136,7 @@ Pattern proven by claudony's `StatusAwareExpiryPolicy`.
 
 ### Process Tree Walk (macOS)
 
-- `ps -eo pid=,ppid=,rss=` → build parent→children map
+- `ps -eo pid=,ppid=,rss=` → build parent→children map (RSS in kilobytes on macOS; ×1024 for `memoryBytes`)
 - From `pane_pid`, recursively collect all descendants
 - Filter for Claude root (command contains `claude`)
 - Sum RSS of Claude root + all children (MCP servers, subagents)
@@ -197,6 +216,7 @@ GET    /api/terminals              → List<AgentSnapshot>
 GET    /api/terminals/{name}       → AgentSnapshot
 POST   /api/terminals              → create terminal (optional auto-start)
 DELETE /api/terminals/{name}       → destroy terminal (kills agent if running, clears PAUSED state)
+POST   /api/terminals/{name}/input → send keystrokes to terminal (existing, renamed from /api/sessions)
 ```
 
 ### Agent Sub-Resource Endpoints
@@ -253,9 +273,9 @@ Each terminal entry shows:
 
 | State | Buttons |
 |-------|---------|
-| RUNNING | refresh, pause |
+| RUNNING | refresh, pause, stop |
 | PAUSED | resume |
-| IDLE | start |
+| IDLE | start (defaults to `claude`) |
 | STARTING | spinner (no actions) |
 
 ### Memory Display
