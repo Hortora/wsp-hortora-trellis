@@ -198,6 +198,13 @@ is initialized in PAUSED state. This survives both sidecar and tmux server
 restarts, consistent with how terminal metadata (`@trellis_slot`,
 `@trellis_repo`, `@trellis_issue`) is already persisted and recovered.
 
+**Clearing `@trellis_agent_state`:** Every transition OUT of PAUSED clears the
+tmux option to prevent stale persistence across restarts:
+- `resumeAgent` clears before sending keys
+- `stopAgent` (from PAUSED) clears before setting IDLE
+- Monitor `PAUSED → RUNNING` detection clears on transition
+- `clearState` (terminal destruction) clears as part of teardown
+
 **Bootstrap ordering:** `AgentProcessManager` MUST NOT start its scheduled
 polling until `TerminalRegistry.bootstrap()` completes. Standard Quarkus
 lifecycle ordering via `@Observes StartupEvent` with `@Priority`. The first
@@ -208,9 +215,9 @@ monitor cycle after bootstrap completes is the authoritative initial state.
 | Operation | Action | State Transition |
 |-----------|--------|-----------------|
 | `startAgent(terminal, opts)` | Construct command from `opts`, verify shell, send-keys | IDLE → STARTING → RUNNING |
-| `stopAgent(terminal)` | Tree-kill (§Kill Semantics) | RUNNING → IDLE |
+| `stopAgent(terminal)` | Tree-kill (§Kill Semantics), clear `@trellis_agent_state` | RUNNING → IDLE, PAUSED → IDLE |
 | `pauseAgent(terminal)` | Tree-kill, persist PAUSED via `@trellis_agent_state` | RUNNING → PAUSED |
-| `resumeAgent(terminal)` | Verify shell, `tmux send-keys 'claude -c' Enter` | PAUSED → STARTING → RUNNING |
+| `resumeAgent(terminal)` | Clear `@trellis_agent_state`, verify shell, send-keys `claude -c` | PAUSED → STARTING → RUNNING |
 | `refreshAgent(terminal)` | Set STARTING → tree-kill → wait → send `claude -c` | RUNNING → STARTING → RUNNING |
 
 All methods are on `AgentProcessManager`. The same component owns both the
@@ -229,6 +236,13 @@ record StartAgentRequest(
 The sidecar constructs the exact shell command. This eliminates command
 injection — the sidecar never sends arbitrary user-supplied text to the
 terminal via lifecycle operations.
+
+**Validation:** `resume` and `prompt` are mutually exclusive. Setting both
+is a 400 Bad Request — you cannot continue an existing session and provide
+a new initial prompt simultaneously. Valid combinations:
+- `resume=false, prompt=null` → `claude` (fresh session)
+- `resume=false, prompt="..."` → `claude -p "..."` (fresh session with prompt)
+- `resume=true, prompt=null` → `claude -c` (continue session)
 
 **Terminal state verification:** Before sending keys, lifecycle operations verify
 that `pane_current_command` is a shell (same shell command set as the monitor).
@@ -357,6 +371,7 @@ cycle (5s), making replay unnecessary for a local sidecar.
 | Terminal not found | 404 | `{ "error": "terminal not found: <name>" }` |
 | Invalid state transition (e.g., stop when IDLE, resume when RUNNING) | 409 Conflict | `{ "error": "cannot <op> agent in state <current>", "state": "<current>" }` |
 | Concurrent lifecycle operation on same terminal | 409 Conflict | `{ "error": "operation already in progress for: <name>" }` |
+| Contradictory start request (`resume=true` + `prompt` set) | 400 Bad Request | `{ "error": "resume and prompt are mutually exclusive" }` |
 
 All agent operations return 409 for invalid state transitions rather than
 silently succeeding. The response includes the current state so the frontend
