@@ -154,6 +154,22 @@ The `PAUSED` state is only set by explicit lifecycle operations, never by the
 monitor. This prevents a paused terminal from flipping to IDLE when the monitor
 runs.
 
+**Uncontrolled exit ambiguity:** The monitor cannot distinguish a Claude crash
+from a user typing `/exit` — both result in the process disappearing. Lifecycle
+operations (`stopAgent`, `pauseAgent`) set state directly and are unambiguous.
+The monitor-detected `RUNNING → IDLE` covers all uncontrolled exits. If
+crash-specific behavior (auto-restart, alerting) is needed later,
+`ProcessHandle.onExit()` could capture exit codes.
+
+### Bootstrap Initialization
+
+When `TerminalRegistry.bootstrap()` discovers existing tmux sessions on startup,
+`AgentProcessManager` has no entries yet. Until the first monitor cycle (within
+5 seconds), `AgentSnapshot.process` is `null` for bootstrapped terminals —
+effectively showing IDLE even if Claude is running. The first scheduled poll
+corrects this. This brief inaccuracy is acceptable: IDLE→RUNNING is a safe
+false-negative that blocks no user action.
+
 ### State Storage
 
 - `ConcurrentHashMap<String, AgentProcess>` inside `AgentProcessManager`, keyed by terminal name
@@ -173,6 +189,13 @@ runs.
 
 All methods are on `AgentProcessManager`. The same component owns both the
 scheduled poll and the lifecycle operations — no cross-component state sharing.
+
+**Resume/refresh always use `claude -c`:** This is intentional. The `-c` flag
+continues the most recent Claude session, restoring conversation history, model
+selection, and tool state. The original start command is stored in
+`AgentProcess.command` for display and diagnostics, but is not replayed on
+resume — its effects (initial prompt, flags) are already part of the session
+state that `-c` restores.
 
 ### Auto-Start on Terminal Creation
 
