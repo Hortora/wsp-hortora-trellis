@@ -1,0 +1,9 @@
+branch: issue-22-slot-agent-coordination
+project-sha: 9cababc891a429fc4100cd9dfab247545adc4332
+date: 2026-08-03
+issue: 22
+issue-repo: Hortora/trellis
+covers: 22
+flyway-next-v: none
+design-repo: workspace
+design-section-hashes: 
