@@ -58,11 +58,33 @@ record ProposedAction(
     String rationale,
     ActionStatus status,
     String adviceId,
+    String workspace,
     Instant proposedAt,
     Instant resolvedAt,
     String executionResult
 )
 ```
+
+### State Machine
+
+Valid transitions — any transition not listed is rejected with 409 Conflict.
+COMPLETED, FAILED, REJECTED, and EXPIRED are terminal states.
+
+```
+PROPOSED   → APPROVED    (approve, LOW risk)
+PROPOSED   → CONFIRMING  (approve, HIGH risk)
+PROPOSED   → REJECTED    (reject)
+PROPOSED   → EXPIRED     (auto-expiry on state change)
+CONFIRMING → EXECUTING   (confirm)
+CONFIRMING → PROPOSED    (cancel — user backs out of confirmation)
+APPROVED   → EXECUTING   (internal — immediate, no user action)
+EXECUTING  → COMPLETED   (execution succeeded)
+EXECUTING  → FAILED      (execution failed)
+```
+
+Note: APPROVED is a transient state for LOW-risk actions — the service
+moves through it to EXECUTING in the same call. It exists in the enum
+for audit trail completeness but is never visible in the UI.
 
 ### Risk Classification
 
@@ -113,22 +135,60 @@ sealed interface CoordinatorEvent {
 ### Event Flow
 
 1. **ActionStateChangedEvent** fires whenever a `ProposedAction`
-   transitions state. The LLM sees outcomes and can propose follow-ups.
+   transitions state. Emitted by `ActionService` after persisting the
+   state change. The LLM sees outcomes and can propose follow-ups.
 2. **LifecycleOperationEvent** fires when lifecycle operations complete
    — whether triggered by an approved action OR by the user directly via
    the existing REST API. Gives the coordinator visibility into manual
    operations for auto-expiry.
 3. `CoordinatorEventObserver` gains new observer methods for these events.
 4. `SignificanceFilter` is extended — action state changes and lifecycle
-   operations are always significant.
+   operations are significant (subject to the circuit breaker).
+
+### LifecycleOperationEvent Sourcing
+
+`LifecycleManager` already fires a `WorkspaceChanged` CDI event after each
+operation. `LifecycleOperationEvent` is emitted from the same location —
+`LifecycleManager.withLock()` wraps each operation and has access to the
+`OperationResult`. After the operation completes, it fires
+`LifecycleOperationEvent` with the operation name, success flag, and a
+summary derived from `OperationResult.output()`.
+
+This means both action-triggered and direct-API-triggered lifecycle
+operations emit events — no special wiring needed in `LifecycleActionExecutor`.
+The executor calls `LifecycleManager` methods, and `LifecycleManager`
+emits the events itself.
+
+### Circuit Breaker
+
+`ActionStateChangedEvent` feeds the accumulator, which can trigger the LLM,
+which may propose more actions, generating more events. Without a guard
+this is an unbounded feedback loop.
+
+**Mitigation:** `SignificanceFilter` tracks action-originated events per
+window. If the batch contains only `ActionStateChangedEvent` and
+`LifecycleOperationEvent` (no workspace/analysis/issue events), and the
+action event count in the current window exceeds a threshold (default: 5),
+the batch is classified as not significant. This breaks the loop — the
+coordinator only proposes new actions when real workspace activity
+accompanies action state changes.
+
+Additionally, `ActionStateChangedEvent` for terminal states (EXPIRED,
+REJECTED) is excluded from the accumulator entirely — these are
+bookkeeping transitions, not actionable signals.
 
 ### Auto-Expiry Mechanism
 
 When a `LifecycleOperationEvent` arrives, `ActionService.expireStale()`
-checks all PROPOSED actions whose `actionType` and params overlap with
-the completed operation. For example, a successful `slotMerge` for slot X
-expires any pending "merge slot X" action. This is a precondition check,
-not an LLM call.
+checks all PROPOSED, APPROVED, and CONFIRMING actions whose `actionType`
+and params overlap with the completed operation. For example, a successful
+`slotMerge` for slot X expires any pending "merge slot X" action. This is
+a precondition check, not an LLM call.
+
+Auto-expiry transitions do NOT emit `ActionStateChangedEvent` to the
+accumulator — they are excluded by the circuit breaker rule above. The
+state change is still persisted and broadcast via SSE for frontend
+updates.
 
 ## §3 Action Executor Framework
 
@@ -139,8 +199,50 @@ interface ActionExecutor {
     ActionResult execute(ProposedAction action);
 }
 
-record ActionResult(boolean success, String detail) {}
+record ActionResult(
+    boolean success,
+    int exitCode,
+    Map<String, String> output,
+    String detail
+)
 ```
+
+`ActionResult` preserves the full `OperationResult` structure (exit code,
+output map) rather than collapsing to a boolean + string. The `detail`
+field carries stderr or a human-readable summary. For advisory actions,
+`exitCode` is 0 and `output` is empty.
+
+### Exception Handling
+
+`LifecycleManager` methods throw `IOException`, `InterruptedException`,
+and `ConcurrentOperationException`. `ActionExecutor.execute()` does not
+declare checked exceptions — `LifecycleActionExecutor` catches these and
+converts them to failed `ActionResult`:
+- `ConcurrentOperationException` → `ActionResult(false, -1, Map.of(), message)`
+- `IOException`/`InterruptedException` → `ActionResult(false, -1, Map.of(), message)`
+
+### Async Execution
+
+`LifecycleManager` operations are synchronous and blocking (they shell out
+to Python scripts). These can take 30-120 seconds for operations like
+`end` (rebase + push + stamp).
+
+`ActionService.execute()` runs on a dedicated single-thread executor (not
+the Vert.x event loop or JAX-RS worker thread). The REST endpoint returns
+immediately with the action in EXECUTING state. The frontend observes the
+transition to COMPLETED or FAILED via the `coordinator:action` SSE topic.
+
+```java
+private final ExecutorService actionExecutor =
+    Executors.newSingleThreadExecutor(r -> {
+        var t = new Thread(r, "action-executor");
+        t.setDaemon(true);
+        return t;
+    });
+```
+
+Single-threaded to match `LifecycleManager`'s per-workspace locking — only
+one lifecycle operation can run at a time anyway.
 
 ### LifecycleActionExecutor
 
@@ -159,6 +261,12 @@ Wraps `LifecycleManager`. Maps `actionType` to manager calls:
 
 Params are drawn from `ProposedAction.params()`. Validated against the
 expected param set before execution.
+
+**List-valued params:** `slotCreate` and `epicSetup` take `List<String> args`.
+These are encoded in `params` as `args.0`, `args.1`, `args.2`, etc.
+`LifecycleActionExecutor` reconstructs the list by collecting all
+`args.N` keys in numeric order. This keeps `params` as `Map<String, String>`
+without introducing `Map<String, Object>` or JSON-in-JSON encoding.
 
 ### AgentActionExecutor
 
@@ -219,6 +327,19 @@ CREATE TABLE coordinator_actions (
 Same SQLite database as `coordinator_advice`. Schema creation extends
 `CoordinatorSchemaManager`.
 
+### Atomicity
+
+Advice and action are created in the same SQLite transaction. The
+`CoordinatorService` obtains a connection, inserts the advice row, then
+calls `ActionService.propose()` with the same connection. If either
+insert fails, both roll back. This prevents orphaned advice cards that
+reference a non-existent action.
+
+The SSE broadcasts (`coordinator:advice` and `coordinator:action`) are
+sent after the transaction commits — both in the same call, advice first.
+This eliminates the race where the frontend receives an advice with
+`actionKey` and fetches the action before it exists.
+
 ### ActionService
 
 `@ApplicationScoped`. Owns the full action lifecycle. Distinct from
@@ -237,6 +358,7 @@ public class ActionService {
                            String rationale, String workspace);
     ProposedAction approve(String actionId);
     ProposedAction confirm(String actionId);
+    ProposedAction cancel(String actionId);    // CONFIRMING → PROPOSED
     ProposedAction reject(String actionId);
     void expireStale(String actionType, Map<String,String> params);
 
@@ -284,9 +406,19 @@ system prompt so the LLM generates valid payloads.
 
 ### Parsing
 
-`CoordinatorService.parseAdviceResponse()` is extended to parse the nested
-`action` object. When present, `CoordinatorService` calls
-`actionService.propose()` after persisting the advice.
+L1's `parseAdviceResponse()` uses a hand-rolled `extractJsonString()` that
+only handles flat key-value pairs. The nested `action` object with its own
+`params` map cannot be parsed this way.
+
+**New approach:** Extract a `parseActionResponse()` method that uses
+`jakarta.json.JsonReader` (available via `quarkus-rest-jackson` transitive)
+to parse the full response. This replaces the hand-rolled parser for L2
+responses. L1-style responses (no `action` field) still work — the parser
+checks for the `action` key and returns `null` if absent.
+
+`CoordinatorService` calls `actionService.propose()` after persisting the
+advice. Both calls use the same SQLite connection in a single transaction
+(see §4 Atomicity).
 
 Both paths (proactive and interactive) parse action proposals from LLM
 responses.
@@ -301,6 +433,7 @@ tracks action state via a `Map<string, ProposedAction>`, updated by SSE.
 | Action status | Card rendering |
 |---|---|
 | PROPOSED | Approve + Reject buttons alongside Dismiss |
+| APPROVED | Transient — immediately transitions to EXECUTING (not visible) |
 | CONFIRMING | Card expands: description, consequences, Confirm + Cancel |
 | EXECUTING | Spinner with "Executing..." |
 | COMPLETED | Green checkmark + result summary |
@@ -343,6 +476,7 @@ GET    /api/coordinator/actions/{id}                    → ProposedAction
 POST   /api/coordinator/actions/{id}/approve            → ProposedAction
 POST   /api/coordinator/actions/{id}/reject             → ProposedAction
 POST   /api/coordinator/actions/{id}/confirm            → ProposedAction
+POST   /api/coordinator/actions/{id}/cancel             → ProposedAction (CONFIRMING → PROPOSED)
 ```
 
 ### Error Responses
@@ -359,15 +493,23 @@ POST   /api/coordinator/actions/{id}/confirm            → ProposedAction
 ### Unit Tests (no tmux, no LLM)
 
 - **ActionServiceTest** — state machine: propose→approve→execute→complete,
-  propose→reject, propose→expire. HIGH-risk CONFIRMING gate. Invalid
-  transitions rejected.
+  propose→reject, propose→expire, confirm→cancel round-trip. HIGH-risk
+  CONFIRMING gate. Invalid transitions rejected (409). Expiry covers
+  PROPOSED, APPROVED, and CONFIRMING states.
 - **LifecycleActionExecutorTest** — mock `LifecycleManager`, verify method
-  dispatch per `actionType`, param extraction.
+  dispatch per `actionType`, param extraction, list-valued param
+  reconstruction for `slotCreate`/`epicSetup`. Verify checked exception
+  conversion to failed `ActionResult`.
 - **AgentActionExecutorTest** — all types return "not yet available".
 - **AdvisoryActionExecutorTest** — acknowledge-only behaviour.
 - **ActionExpiryTest** — `LifecycleOperationEvent` expires matching
-  PROPOSED actions.
+  PROPOSED, APPROVED, and CONFIRMING actions. Verify expiry events
+  are excluded from accumulator (circuit breaker).
 - **SignificanceFilterTest** — action and lifecycle events pass filter.
+  Circuit breaker triggers when batch is action-only and exceeds
+  threshold.
+- **ActionResponseParserTest** — verify nested JSON action parsing with
+  `jakarta.json`, null action field, malformed action, missing params.
 
 ### Integration Tests (`@QuarkusTest`, mock LLM)
 
