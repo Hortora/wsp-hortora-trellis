@@ -1,0 +1,9 @@
+branch: issue-18-llm-coordinator-l3-isx
+project-sha: 1cf26c64042f19c4a498a8d650b1389bb5c80bd7
+date: 2026-08-02
+issue: 18
+issue-repo: Hortora/trellis
+covers: 18
+flyway-next-v: unknown
+design-repo: workspace
+design-section-hashes: 
