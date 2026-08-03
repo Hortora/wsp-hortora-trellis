@@ -2,32 +2,36 @@
 
 ## Last Session
 
-Closed `epic-2-post-mvp` branch (48 commits squashed to 4). Three features landed on main:
-- #14 Garden Service + Provenance — search, browse, provenance enrichment
-- #20 Agent process lifecycle — monitoring, memory, start/stop/pause/resume/refresh, REST API, frontend
-- #15 Artifact browser and workbench shell — dock bar replacing hash router, sidebar navigation, markdown viewer
+Started #18 (LLM Coordinator L3). Designed autonomous execution with
+observation mode (spec + light review — 30 findings addressed). Task 1
+of 7 implemented (enums, PreferencesService, AutonomyResolver — tests
+green). Also: housekeeping — reopened epic #2, stamped 6 branches,
+published 2 blog entries to hortora.github.io, fixed blog routing.
 
-Also: closed trellis#1 (workspace state log — superseded by soredium worklog). Filed soredium#157 (REST+MCP for worklog) and soredium#158 (individual issue tracking in worklog).
+## Immediate Next Step
 
-Fixed: 400 response body for invalid StartAgentRequest (moved validation from record constructor to explicit validate() method).
+Resume #18 implementation at Task 2 (schema v3 + CAS transitions).
+Run `/work` — branch `issue-18-llm-coordinator-l3-isx` is open with `.meta`.
+
+Plan: `plans/2026-08-02-llm-coordinator-l3.md`
+Spec: `specs/issue-18-llm-coordinator-l3-isx/2026-08-02-llm-coordinator-l3-design.md`
+
+## Session Notes
+
+- ISX paused — user will raise when ready; not in L3 scope
+- ide_create_file unreliable for new packages — use mkdir + Write
+- Epic #2 reopened (was prematurely closed at MVP boundary)
+- Blog routing fixed: hortora projects → hortora.github.io/_posts/
+
+## What's Left
+
+- #18 L3 implementation: 6 of 7 tasks remaining · L · Med
 
 ## What's Next
 
-| # | Description | Scale | Complexity | Status |
-|---|-------------|-------|------------|--------|
-| #17 | LLM Coordinator L2 — Propose Actions | L | High | Worktree ready |
-| #19 | Velocity Tracking + Projections | M | Med | Ready |
-| #16 | Drafthouse Integration (B6c) | M | Med | Unblocked by #15 |
-| #18 | LLM Coordinator L3 + ISX (B8) | L | High | Blocked by #17 |
-
-## Epic Progress
-
-Batches 1-6 (MVP) complete. #14, #15, #20 complete and landed. Remaining: #16, #17, #18, #19.
-
-## References
-
-- Worktree for #17: `/Users/mdproctor/claude/hortora/trellis/.claude/worktrees/issue-17-llm-coordinator-l2`
-- Soredium worklog REST+MCP: Hortora/soredium#157
-- Soredium issue tracking: Hortora/soredium#158
-- Slot-agent coordination: Hortora/trellis#22
-- Garden entry: GE-20260803-17fc03 (casehub-packages portal resolution gotcha)
+| # | Description | Scale | Complexity | Notes |
+|---|-------------|-------|------------|-------|
+| #16 | Drafthouse Integration (B6c) | M | Med | Ready |
+| #19 | Velocity Tracking (B9) | M | Med | Ready |
+| #21 | End-to-end provenance test path | S | Low | Ready |
+| #22 | Slot ↔ agent pause/resume coordination | M | Med | Enhancement |
