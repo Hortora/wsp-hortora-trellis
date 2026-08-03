@@ -20,12 +20,17 @@ hand-coded view deepens this debt.
 Two changes in one:
 
 1. **Workbench shell** — replace the hash router with a dock-bar workbench.
-   Existing views are wrapped via `hostPanel` (zero rewrite). The shell
-   manages panel activation, workspace context, and deep linking.
+   A Lit component (`trellis-workbench`) renders a vertical dock bar and
+   manages panel activation. Existing views become panels — created as
+   custom elements with properties set by the shell, exactly as the current
+   router does. No `hostPanel` DSL call — the shell is the host, not a
+   pages-rendered page.
 
-2. **Artifact panel** — the first panel built natively with pages primitives.
-   Sidebar navigation by artifact type, markdown rendering via the platform's
-   `marked` + `DOMPurify` pipeline.
+2. **Artifact panel** — the first panel built using platform rendering
+   primitives. A thin Lit wrapper (`trellis-artifact-panel`) that uses the
+   platform's `renderMarkdown()` from `channel-activity` for content display
+   and a grouped sidebar for type-based navigation. The wrapper handles the
+   fetch-on-select cycle; the rendering uses platform primitives throughout.
 
 ## §1 Workbench Shell
 
@@ -57,7 +62,9 @@ Two changes in one:
 ### Shell Component — `trellis-workbench`
 
 `trellis-workbench` is a Lit component that owns the dock bar and panel lifecycle.
-It replaces the `route()` function in `app.ts`.
+It replaces the `route()` function in `app.ts`. It is not a pages-rendered page —
+it is the application shell that hosts panels, some of which may use pages
+primitives internally.
 
 ```typescript
 const PANELS = {
@@ -77,6 +84,17 @@ Responsibilities:
 - Pass workspace root and panel-specific context (slot number, epic ref) to panels
 - Sync active panel with URL hash for deep linking
 
+### Panel Lifecycle
+
+Panels are created lazily on first activation and cached. When the workspace root
+changes (user switches to a different project), all cached panels are destroyed
+and recreated on next activation — this prevents stale state from a previous
+workspace leaking into the new one.
+
+Context properties (`workspaceRoot`, `slotNumber`, `epicRef`, etc.) are set on
+panel elements whenever the active panel changes or the hash updates. Panels are
+responsible for reacting to property changes (standard Lit reactive properties).
+
 ### Hash Routing
 
 The hash remains the deep-link mechanism. The workbench reads it on load and
@@ -88,11 +106,14 @@ listens for `hashchange`.
 | `#slot/N?root=...` | slot | `slotNumber`, `workspaceRoot` |
 | `#artifacts?root=...` | artifacts | `workspaceRoot` |
 | `#garden` | garden | — |
-| `#coordinator?root=...` | coordinator | `workspaceRoot` |
+| `#coordinator?root=...&epic=owner/repo/N` | coordinator | `workspaceRoot`, `epicRef` |
 | `#epic/owner/repo/N?root=...` | epic | `owner`, `repo`, `epicNumber`, `workspaceRoot` |
 
 Clicking a dock button updates the hash. Hash changes activate the corresponding
 panel. Old hash formats continue to work — the mapping is backward compatible.
+
+Unknown or malformed hashes activate the workspace panel as a safe default (or
+the launcher if no workspace root is available).
 
 ### Launcher Exception
 
@@ -103,9 +124,10 @@ workspace panel.
 
 ### Existing Views — Zero Rewrite
 
-Existing Lit components are wrapped by creating them as the panel content element.
-The workbench sets properties on them (`workspaceRoot`, `slotNumber`, etc.) the
-same way the current router does. No changes to existing view code.
+Existing Lit components become panels by being created as custom elements within
+the workbench's panel container. The workbench sets properties on them
+(`workspaceRoot`, `slotNumber`, etc.) the same way the current router does.
+No changes to existing view code.
 
 Future migration: each panel can be incrementally rewritten to use pages
 primitives. The artifact panel serves as the reference implementation. One issue
@@ -133,9 +155,10 @@ per panel migration.
 
 ### Component — `trellis-artifact-panel`
 
-A thin Lit wrapper that composes platform primitives and handles the data
-fetch cycle. The sidebar and markdown renderer use the platform's rendering
-pipeline; the wrapper manages fetch-on-select and client-side caching.
+A thin Lit wrapper that composes platform rendering primitives and handles the
+data fetch cycle. Uses `renderMarkdown()` from `@casehubio/channel-activity` for
+markdown→HTML conversion with DOMPurify sanitization. The sidebar is a custom
+grouped list (artifact types as collapsible headings, files as clickable items).
 
 State:
 - `artifacts: ArtifactEntry[]` — populated from list endpoint
@@ -157,20 +180,21 @@ State:
 
 ### Sidebar Navigation
 
-The sidebar groups artifacts by type. Each type heading is expandable. Individual
+The sidebar groups artifacts by type. Each type heading is collapsible. Individual
 files are listed under their type with the filename (sans extension) as the label.
 Clicking a file selects it and loads its content.
 
-Sorted: types in the order listed above, files by `modifiedAt` descending within
-each type (most recently modified first).
+Sorted: types in the fixed order listed above, files alphabetically by name within
+each type. (`modifiedAt` is unreliable after git operations like checkout and
+rebase — alphabetical ordering is stable and predictable.)
 
 ### Markdown Rendering
 
-Uses the platform's `marked` + `DOMPurify` pipeline from `channel-activity`.
-The `renderMarkdown()` function already handles:
-- GFM (tables, strikethrough, task lists)
-- Code blocks (no syntax highlighting — future enhancement)
-- XSS sanitization via DOMPurify whitelist
+Uses `renderMarkdown()` from `@casehubio/channel-activity` — the platform's
+`marked` (GFM mode) + `DOMPurify` pipeline. This function:
+- Parses GFM markdown (tables, strikethrough, task lists, fenced code blocks)
+- Sanitizes output via DOMPurify with a strict tag/attribute whitelist
+- Returns safe HTML string
 
 Not in scope for #15:
 - Syntax highlighting (add via `marked` highlight extension later)
@@ -179,8 +203,19 @@ Not in scope for #15:
 ### Content Loading
 
 1. Panel mounts → `GET /api/artifacts?root=<workspace>` → populate sidebar
-2. User clicks artifact → check `contentCache` → if miss, `GET /api/artifacts/content?path=<path>` → render
-3. Cache is per-session (Map), cleared on panel unmount
+2. User clicks artifact → check `contentCache` → if miss,
+   `GET /api/artifacts/content?path=<path>` → render
+3. Cache is per-session (Map), cleared when `workspaceRoot` property changes
+
+### UI States
+
+| State | Display |
+|-------|---------|
+| Loading artifact list | Sidebar: "Loading..." spinner |
+| Empty artifact list | Sidebar: "No artifacts found" message |
+| Loading content | Content pane: "Loading..." spinner (sidebar remains interactive) |
+| Content load error | Content pane: error message with retry link |
+| No selection | Content pane: "Select an artifact to view" placeholder |
 
 ## §3 Backend
 
@@ -193,7 +228,7 @@ record ArtifactEntry(
     String type,        // "spec", "adr", "plan", "blog", "handover", "design", "journal"
     String name,        // filename without extension
     String path,        // absolute path
-    Instant modifiedAt  // file last modified
+    Instant modifiedAt  // file last modified (informational, not used for ordering)
 )
 ```
 
@@ -203,19 +238,20 @@ Stateless utility. Scans workspace and project paths for markdown artifacts.
 
 ```java
 class ArtifactScanner {
-    List<ArtifactEntry> scan(Path workspaceRoot, Path projectRoot)
+    List<ArtifactEntry> scan(Path workspaceRoot)
 }
 ```
 
 Scan logic:
+- Resolve project root from the workspace's `proj/` symlink. If the symlink is
+  missing or broken, log a warning and skip project artifacts — do not throw.
+  Workspace artifacts are still returned.
 - For each artifact type, walk its known directory in workspace and/or project
 - Collect `*.md` files, classify by parent directory name
-- Single-file artifacts (`HANDOFF.md`, `JOURNAL.md`, `ARC42STORIES.MD`) checked directly
+- Single-file artifacts (`HANDOFF.md`, `JOURNAL.md`, `ARC42STORIES.MD`) checked
+  directly — if the file doesn't exist, skip silently
 - Skip `INDEX.md` files (convention: index files are not browseable artifacts)
-- Return sorted: by type order, then `modifiedAt` descending within type
-
-The `projectRoot` is resolved from the workspace's `proj/` symlink:
-`workspaceRoot.resolve("proj").toRealPath()`.
+- Return sorted: by type order (fixed), then alphabetically by name within type
 
 ### ArtifactResource
 
@@ -224,8 +260,14 @@ GET /api/artifacts?root=<workspace-root>
     → List<ArtifactEntry>
 
 GET /api/artifacts/content?path=<absolute-path>&root=<workspace-root>
-    → raw markdown (text/plain)
+    → raw markdown (text/plain, max 1 MB)
 ```
+
+### Content Size Limit
+
+The content endpoint enforces a 1 MB file size limit. Files larger than 1 MB
+return 413 Payload Too Large. This prevents accidental loading of large generated
+files or binary content mistakenly placed in artifact directories.
 
 ### Path Validation
 
@@ -233,7 +275,9 @@ The content endpoint validates that `path` resolves to a file within either:
 - The workspace root
 - The project root (resolved via `proj/` symlink)
 
-Validation: `path.toRealPath().startsWith(workspaceRoot) || path.toRealPath().startsWith(projectRoot)`. Any path outside returns 403.
+Validation uses `Path.toRealPath()` to resolve symlinks before the prefix check,
+ensuring symlinks within the workspace/project tree are followed correctly.
+Any path outside these boundaries returns 403.
 
 ### Error Responses
 
@@ -243,26 +287,28 @@ Validation: `path.toRealPath().startsWith(workspaceRoot) || path.toRealPath().st
 | Workspace root not found | 404 |
 | Artifact path outside allowed roots | 403 |
 | Artifact file not found | 404 |
+| Artifact file exceeds 1 MB | 413 |
 
 ## §4 Testing
 
 ### Unit Tests
 
-**`ArtifactScannerTest`** — mock filesystem (`java.nio.file.Files.createTempDirectory`):
+**`ArtifactScannerTest`** — temp filesystem (`java.nio.file.Files.createTempDirectory`):
 - Finds specs in both workspace and project directories
 - Finds single-file artifacts (HANDOFF.md, ARC42STORIES.MD)
 - Handles missing directories gracefully (empty list, no error)
+- Handles broken `proj/` symlink gracefully (returns workspace artifacts only)
 - Skips INDEX.md files
-- Sorts by type order, then modifiedAt descending
-- Resolves project root via `proj/` symlink
+- Sorts by type order, then alphabetically by name
 
 ### REST Tests (`@QuarkusTest`)
 
 **`ArtifactResourceTest`**:
 - List endpoint returns entries for a workspace with artifacts
-- Content endpoint serves raw markdown
+- Content endpoint serves raw markdown as text/plain
 - Content endpoint returns 403 for path traversal attempt
 - Content endpoint returns 404 for nonexistent file
+- Content endpoint returns 413 for file exceeding 1 MB
 - List endpoint returns empty array for workspace with no artifacts
 
 ### Frontend
@@ -274,6 +320,7 @@ Manual Playwright verification:
 - Selecting an artifact loads and renders markdown content
 - Hash deep linking works (`#artifacts?root=...`)
 - Existing views (workspace, slot, garden) still work when accessed via dock
+- Workspace change destroys and recreates panels
 
 ## §5 Scope Boundary
 
@@ -282,8 +329,9 @@ Manual Playwright verification:
 - Existing views wrapped as panels (zero rewrite)
 - Artifact panel with sidebar navigation and markdown rendering
 - Backend artifact scanning and content serving
-- Path validation on content endpoint
+- Path validation and size limit on content endpoint
 - Hash-based deep linking
+- Panel lifecycle on workspace change
 
 ### Out of scope
 - Rewriting existing views to use pages primitives (future: one issue per panel)
