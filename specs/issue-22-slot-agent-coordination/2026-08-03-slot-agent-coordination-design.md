@@ -2,7 +2,7 @@
 
 **Issue:** Hortora/trellis#22
 **Date:** 2026-08-03
-**Status:** Draft
+**Status:** Approved
 **Parent:** Hortora/trellis#20 (Process Isolation)
 
 ## Problem
@@ -28,66 +28,119 @@ public class SlotAgentCoordinator {
     @Inject LifecycleManager lifecycleManager;
     @Inject AgentProcessManager agentProcessManager;
     @Inject TerminalRegistry terminalRegistry;
+
+    private final ConcurrentHashMap<String, ReentrantLock> slotLocks =
+            new ConcurrentHashMap<>();
 }
 ```
 
+#### Slot-Level Lock
+
+The coordinator owns a slot-keyed `ReentrantLock` that covers the entire
+coordinated operation — both the agent cascade phase and the git ops phase.
+This prevents interleaving of concurrent operations on the same slot (e.g.,
+rapid pause then resume, or two pause calls). The lock uses `tryLock()` and
+throws `ConcurrentOperationException` on contention, consistent with
+`LifecycleManager.withLock()`.
+
+This lock is outermost — acquired before any agent or lifecycle locks. Lock
+ordering: coordinator slot lock → LifecycleManager workspace lock →
+AgentProcessManager terminal locks.
+
 **`coordinatedPause(slotId, workspaceRoot)`:**
 
-1. Find terminals where `terminal.slot() == slotId`
-2. For each terminal with a RUNNING agent: call
-   `agentProcessManager.gracefulShutdown(terminalName)` — logs failures,
-   does not abort on individual agent failure
-3. Delegate to `lifecycleManager.pause(slotId, workspaceRoot)` for git ops
+1. Acquire slot lock (throw `ConcurrentOperationException` if held)
+2. Find terminals where `terminal.slot() == slotId`
+3. For each terminal with a RUNNING agent: call
+   `agentProcessManager.gracefulShutdown(terminalName)` in parallel —
+   agents are independent, their terminal locks don't conflict. Log failures,
+   do not abort on individual agent failure. `gracefulShutdown` marks agents
+   as `PAUSED_BY_COORDINATOR` (not plain `PAUSED`) for resume provenance.
+4. Delegate to `lifecycleManager.pause(slotId, workspaceRoot)` for git ops
    (commit WIP, push to stack)
-4. Return the `OperationResult` from the git ops
+5. Release slot lock
+6. Return the `OperationResult` from the git ops
 
 **`coordinatedResume(slotId, workspaceRoot)`:**
 
-1. Delegate to `lifecycleManager.resume(slotId, workspaceRoot)` for git ops
+1. Acquire slot lock (throw `ConcurrentOperationException` if held)
+2. Delegate to `lifecycleManager.resume(slotId, workspaceRoot)` for git ops
    (checkout branches, rebase, reset WIP)
-2. If git ops failed, return immediately — do not restart agents on a broken
-   workspace
-3. Find terminals where `terminal.slot() == slotId`
-4. For each terminal in PAUSED state: call
+3. If git ops failed, release slot lock and return immediately — do not
+   restart agents on a broken workspace
+4. Find terminals where `terminal.slot() == slotId`
+5. For each terminal in `PAUSED_BY_COORDINATOR` state: call
    `agentProcessManager.resumeAgent(terminalName)` — logs failures, does not
-   abort on individual agent failure
-5. Return the `OperationResult` from the git ops
+   abort on individual agent failure. Agents in plain `PAUSED` state (user-
+   manually-paused) are left alone.
+6. Release slot lock
+7. Return the `OperationResult` from the git ops
 
-**Lock ordering:** The coordinator does not acquire locks itself. It calls
-through to `LifecycleManager` (workspace-keyed lock) and `AgentProcessManager`
-methods (terminal-keyed locks). On pause, agents are shut down before
-`LifecycleManager.pause()` acquires its lock. On resume,
-`LifecycleManager.resume()` finishes and releases its lock before agent
-restarts begin. No simultaneous lock holding — the constraint from the
-process isolation spec (LifecycleManager lock first) is satisfied by
-sequencing, not by nested locking.
+**`coordinatedEnd(slotId, workspaceRoot)`:**
+
+1. Acquire slot lock
+2. Find terminals where `terminal.slot() == slotId`
+3. For each terminal with a RUNNING or PAUSED agent: call
+   `agentProcessManager.stopAgent(terminalName)` in parallel — agents must
+   be stopped before the workspace branch is merged and cleaned up
+4. Delegate to `lifecycleManager.end(slotId, workspaceRoot)` for git ops
+5. Release slot lock
+6. Return the `OperationResult` from the git ops
+
+**Pause provenance:** `gracefulShutdown` and the coordinator's pause path
+persist `@trellis_agent_state` as `PAUSED_BY_COORDINATOR` instead of
+`PAUSED`. `coordinatedResume` only restarts agents with this marker. Agents
+paused manually by the user (via the individual pause button, which sets
+plain `PAUSED`) remain paused after slot resume. `initializeFromBootstrap`
+recognizes both values as paused state.
 
 **Failure handling:** Agent cascade failures are logged but never block the
 slot operation. A stuck agent should not prevent workspace state from being
 saved (pause) or restored (resume). The user sees agent state changes via SSE
 and can manually intervene on failed agents.
 
-**REST wiring:** `LifecycleResource.pause()` and `resume()` call the
-coordinator instead of `LifecycleManager` directly. All other lifecycle
-operations (start, end, slotCreate, slotMerge, epicSetup, epicNext) remain
-unchanged — they do not involve agent coordination.
+**Crash recovery:** If the sidecar crashes mid-coordination, the slot lock is
+lost (in-memory only). On restart, `initializeFromBootstrap` recovers
+individual agent PAUSED state from tmux options. The workspace may be in an
+inconsistent state — the user retries the slot pause/resume. Acceptable for a
+local developer tool.
+
+**REST wiring:** `LifecycleResource.pause()`, `resume()`, and `end()` call
+the coordinator instead of `LifecycleManager` directly. The
+`LifecycleActionExecutor` (used by the LLM coordinator) must also route
+through `SlotAgentCoordinator` for pause/resume/end — otherwise programmatic
+lifecycle operations bypass agent coordination. All other lifecycle operations
+(start, slotCreate, slotMerge, epicSetup, epicNext) remain unchanged.
 
 ### §2 Graceful Agent Shutdown
 
-New method on `AgentProcessManager` — `gracefulShutdown(terminalName)`:
+New method on `AgentProcessManager` — `gracefulShutdown(terminalName)`.
 
-1. Check current agent state — if not RUNNING or STARTING, return immediately
-2. Send `Escape` key via `tmux.sendKeys(terminalName, "Escape")` — interrupts
+Must hold the terminal-keyed `ReentrantLock` for its entire duration to
+prevent the 5-second poll cycle from observing transient states
+(e.g., Claude at its input prompt looking like a shell to tmux).
+
+1. Acquire terminal lock
+2. Check current agent state:
+   - RUNNING → proceed to step 3 (graceful path)
+   - STARTING → skip to step 7 (direct `treeKill` — Claude is still
+     initializing, Escape and `/exit` are unreliable)
+   - IDLE, PAUSED, or absent → release lock, return immediately
+3. Send `Escape` key via `tmux.sendKeys(terminalName, "Escape")` — interrupts
    any active generation, returns Claude to the input prompt
-3. Wait 500ms for Claude to return to prompt
-4. Send `"/exit\n"` via `tmux.sendKeys(terminalName, "/exit\n")` — Claude's
-   own clean shutdown
-5. Poll `pane_current_command` up to 10s (every 500ms) — wait for a shell
+4. Wait 500ms for Claude to return to prompt
+5. Poll `pane_current_command` — if shell is already in foreground, Claude
+   exited from the Escape alone. Skip `/exit`, go to step 6.
+   Otherwise send `"/exit\n"` via `tmux.sendKeys(terminalName, "/exit\n")`.
+6. Poll `pane_current_command` up to 10s (every 500ms) — wait for a shell
    command to appear, indicating Claude has exited
-6. If shell appears: process exited cleanly, mark PAUSED
-7. If 10s timeout: fall back to `treeKill`, then mark PAUSED
-8. Persist PAUSED via `@trellis_agent_state` tmux option (same mechanism as
-   existing `pauseAgent`)
+7. If shell appears (or STARTING agent): process exited cleanly (or was
+   killed for STARTING). Mark `PAUSED_BY_COORDINATOR`.
+8. If 10s timeout: fall back to `treeKill`, then mark `PAUSED_BY_COORDINATOR`
+9. Persist via `@trellis_agent_state` tmux option with value
+   `PAUSED_BY_COORDINATOR`. Preserve the original command via
+   `AgentProcess.paused(existing.command())` for resume.
+10. Release terminal lock
 
 **Distinction from `pauseAgent`:** The existing `pauseAgent` does an immediate
 `treeKill` — appropriate for the single-agent pause button in the UI where the
@@ -147,15 +200,21 @@ public enum EvictionReason { PER_AGENT_CRITICAL, SYSTEM_PRESSURE }
 
 1. After collecting RSS for all agents, check per-agent thresholds
 2. Agents exceeding 1 GB: add to eviction queue with `PER_AGENT_CRITICAL`
-3. Check aggregate RSS against system threshold — use
-   `OperatingSystemMXBean.getFreePhysicalMemorySize()` via
-   `((com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean())`
-   for system-wide physical memory (macOS-specific; trellis is macOS-only)
-4. If system pressure: rank agents by RSS descending, add top consumers to
-   eviction queue with `SYSTEM_PRESSURE`
+3. Check system memory pressure. `OperatingSystemMXBean.getFreePhysicalMemorySize()`
+   is unreliable on macOS — the OS uses virtually all RAM for file cache, so
+   "free" memory is routinely under 200 MB even when there is no real pressure.
+   Instead, shell out to `memory_pressure` (macOS-specific) or parse `vm_stat`
+   output to determine actual memory pressure level (normal/warn/critical).
+   Cache the result for the poll interval to avoid per-cycle shell overhead.
+4. If system pressure (warn or critical): rank agents by RSS descending, add
+   the smallest set of top consumers whose cumulative RSS would bring the total
+   agent RSS below the threshold. This prevents marking every agent as an
+   eviction candidate when only one or two need pausing.
 5. When an agent drops below threshold (or is paused/stopped), remove from
    queue
-6. Broadcast eviction queue changes on SSE topic `agent:eviction`
+6. Broadcast eviction queue snapshot as a single batched SSE event on topic
+   `agent:eviction` — one event per poll cycle containing the full current
+   candidate list, not per-agent events that cause UI flicker
 
 #### No Auto-Eviction
 
@@ -169,8 +228,9 @@ which to pause. This avoids the system killing an agent doing critical work.
 
 Integrated into the existing terminal tab group — not a separate view.
 
-Each terminal entry already shows a memory badge that turns red at 500 MB.
-Extended behaviour:
+Each terminal entry already shows a memory badge. Extended behaviour (the
+existing 500 MB threshold changes from red to amber to create room for the
+critical tier):
 
 | Condition | Badge | Action |
 |-----------|-------|--------|
@@ -229,17 +289,25 @@ implementation detail of slot pause/resume.
   `AgentProcessManager`, `TerminalRegistry`. Verify:
   - Pause finds correct terminals by slot
   - Calls graceful shutdown before git ops
+  - Agent shutdowns run in parallel (not sequential)
   - Resume calls git ops before agent restart
   - Resume does not restart agents if git ops failed
+  - Resume only restarts `PAUSED_BY_COORDINATOR` agents, not user-paused
   - Failures in one agent don't block others
   - Terminals not belonging to the slot are untouched
+  - Concurrent operations on same slot rejected (`ConcurrentOperationException`)
+  - End stops all agents (RUNNING and PAUSED) before git ops
 
 - **`AgentProcessManagerTest` (graceful shutdown)** — mock `TmuxManager`.
   Verify:
-  - Escape → /exit → poll sequence
+  - Escape → check shell → /exit → poll sequence
+  - `/exit` skipped if shell appears after Escape (agent already exited)
+  - STARTING agents get direct treeKill, not Escape+/exit
   - treeKill fallback on timeout
-  - No-op for agents not in RUNNING/STARTING state
-  - PAUSED state persisted via `@trellis_agent_state`
+  - No-op for IDLE/PAUSED agents
+  - `PAUSED_BY_COORDINATOR` persisted via `@trellis_agent_state`
+  - Original command preserved in `AgentProcess.paused(command)`
+  - Terminal lock held for entire duration (poll cycle cannot interfere)
 
 - **Eviction queue** — feed canned RSS values to
   `AgentProcessManager.pollTerminalWithPsOutput()`. Verify:
@@ -263,7 +331,7 @@ implementation detail of slot pause/resume.
 ## Scope Boundary
 
 ### In scope
-- SlotAgentCoordinator with coordinated pause/resume
+- SlotAgentCoordinator with coordinated pause/resume/end
 - Graceful agent shutdown (Escape → /exit → fallback)
 - Memory pressure monitoring and eviction queue
 - Eviction queue UI (badges, banner, Evict button)
