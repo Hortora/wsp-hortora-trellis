@@ -2,7 +2,8 @@
 
 **Issue:** Hortora/trellis#18
 **Date:** 2026-08-02
-**Status:** Draft
+**Status:** Approved
+**Review:** Light — coherence, structure, robustness (30 findings addressed)
 
 ## Problem
 
@@ -70,29 +71,45 @@ use the observation countdown — they never skip the countdown entirely.
 
 ### Preferences
 
+**Package:** `io.hortora.trellis.config`
+
 New infrastructure: `~/.trellis/preferences.json` — a JSON file read
 by a new `PreferencesService` (`@ApplicationScoped`). This is separate
 from Quarkus `@ConfigMapping` (`CoordinatorConfig`), which provides
 compile-time defaults from `application.properties`. Preferences are
 user-editable at runtime; config properties are not.
 
+`PreferencesService` is in the `config` package, not `coordinator` —
+it is a general-purpose trellis service, not coordinator-specific.
+
 ```json
 {
-  "coordinator.autonomyLevel": "MANUAL",
-  "coordinator.observationCountdownSeconds": 30,
-  "coordinator.autonomyOverrides": {
-    "slot.create": "GATED",
-    "lifecycle.end": "GATED"
+  "coordinator": {
+    "autonomyLevel": {
+      "/Users/dev/workspace-a": "OBSERVATION",
+      "/Users/dev/workspace-b": "AUTONOMOUS"
+    },
+    "observationCountdownSeconds": 30,
+    "autonomyOverrides": {
+      "slot.create": "GATED",
+      "lifecycle.end": "GATED"
+    },
+    "rateLimitMaxActions": 5,
+    "rateLimitWindowSeconds": 60
   }
 }
 ```
 
-`autonomyLevel` is per-workspace (keyed by workspace root path).
-`observationCountdownSeconds` and `autonomyOverrides` are global.
+`autonomyLevel` is per-workspace — a map keyed by workspace root path.
+Workspaces not in the map default to MANUAL. All other settings are
+global.
 
-`PreferencesService` reads the file on startup and on demand. It is
-the single source for all user-configurable trellis settings — future
-preferences (layout, theme, etc.) go here too.
+**Error handling:** `PreferencesService` reads the file on startup and
+caches the parsed result. On parse failure (malformed JSON, missing
+file), it logs a warning and uses hardcoded defaults (MANUAL, 30s
+countdown, no overrides, 5/60s rate limit). Re-reads on demand when
+the REST API is called — a file watcher is not needed for a
+manually-edited file.
 
 ### CoordinatorConfig (Unchanged)
 
@@ -101,20 +118,62 @@ Existing `CoordinatorConfig` properties (`enabled`, `windowTimeMs`,
 autonomy settings live in preferences, not config — they are
 user-preference concerns, not deployment concerns.
 
+### AutonomyResolver
+
+**Package:** `io.hortora.trellis.coordinator`
+
+Encapsulates the full autonomy resolution logic — extracted from
+`ActionService` to avoid making it a god class and to break the
+circular dependency between `CoordinatorService` (which holds session
+state) and `ActionService` (which needs to read it).
+
+```java
+@ApplicationScoped
+public class AutonomyResolver {
+    @Inject PreferencesService preferences;
+
+    private volatile AutonomyLevel sessionOverride; // null = use preference
+
+    public AutonomyLevel resolveLevel(String workspace) {
+        if (sessionOverride != null) return sessionOverride;
+        return preferences.autonomyLevel(workspace);
+    }
+
+    public AutonomyOverride resolvePolicy(String actionType) {
+        var override = preferences.autonomyOverride(actionType);
+        if (override != null) return override;
+        return RiskClassification.riskFor(actionType) == RiskLevel.LOW
+            ? AutonomyOverride.AUTONOMOUS : AutonomyOverride.GATED;
+    }
+
+    public void setSessionOverride(AutonomyLevel level) { ... }
+    public void clearSessionOverride() { ... }
+    public AutonomyLevel sessionOverride() { ... }
+}
+```
+
+`ActionService` and `CoordinatorService` both inject
+`AutonomyResolver`. Neither depends on the other for autonomy state.
+
 ### Session State
 
-`CoordinatorService` holds a volatile `AutonomyLevel sessionAutonomyLevel`
-field. `null` means "use preference default." The coordinator panel toggle
-writes to this via REST. On sidecar restart, it resets to null.
+`AutonomyResolver` holds the volatile `sessionOverride` field. The
+session override is global — one coordinator per sidecar, one autonomy
+level. When multiple workspaces are active, the session override applies
+to all of them (the per-workspace preference is the differentiation
+mechanism, not the session toggle).
+
+On sidecar restart, the session override resets to null (preference
+default wins).
 
 ### REST API
 
 ```
-GET  /api/coordinator/autonomy
+GET  /api/coordinator/autonomy?workspace={ws}
      → { "level": "OBSERVATION", "source": "session"|"preference" }
 
 POST /api/coordinator/autonomy?level=OBSERVATION
-     → sets session override, returns updated state
+     → sets session override (global), returns updated state
 
 POST /api/coordinator/autonomy/reset
      → clears session override, returns to preference default
@@ -122,85 +181,193 @@ POST /api/coordinator/autonomy/reset
 
 ## §3 Action Lifecycle Changes
 
-The L2 state machine stays unchanged — no new states, no new
-transitions. The difference is who triggers the transitions.
+The L2 state machine stays unchanged — no new enum values, no new
+transitions. L3 changes *who* triggers transitions, not the transitions
+themselves. (Note: overall system state does grow — session overrides,
+countdown map, rate limiter, preferences — but `ActionStatus` is
+untouched.)
+
+### CountdownScheduler
+
+**Package:** `io.hortora.trellis.coordinator`
+
+Extracted from `ActionService` to keep responsibilities focused.
+Owns the `ScheduledExecutorService` for countdown timers and the
+in-memory countdown map.
+
+```java
+@ApplicationScoped
+public class CountdownScheduler {
+    private final ScheduledExecutorService scheduler =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            var t = new Thread(r, "countdown-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+
+    record PendingCountdown(String actionId, Instant deadline,
+                            ScheduledFuture<?> future) {}
+    private final Map<String, PendingCountdown> countdowns =
+        new ConcurrentHashMap<>();
+
+    void schedule(String actionId, int seconds,
+                  Consumer<String> onFire) { ... }
+    void cancel(String actionId) { ... }
+    void cancelAll() { ... }
+    boolean hasCountdown(String actionId) { ... }
+    Instant deadline(String actionId) { ... }
+}
+```
+
+The `onFire` callback is `ActionService::autoExecute`. The scheduler
+wraps every timer callback in try-catch — uncaught exceptions must not
+kill the `ScheduledExecutorService`.
+
+This is separate from the existing single-thread `actionExecutor` in
+`ActionService` (which runs blocking lifecycle operations). Timer
+fires submit to the action executor; they do not block the scheduler
+thread.
 
 ### ActionService.propose() — Autonomy-Aware Path
 
 After creating the action in PROPOSED and broadcasting it, `propose()`
-checks the effective autonomy:
+checks the effective autonomy via `AutonomyResolver`:
 
 ```
-1. Resolve current autonomy level (session override ?? preference default)
+1. Resolve current autonomy level via autonomyResolver.resolveLevel(workspace)
 2. If MANUAL → return (L2 behaviour, action sits in PROPOSED)
-3. Resolve effective policy for this action type:
-   a. Check override map → if present, use it
-   b. Fall back to RiskClassification.riskFor(actionType)
-      → LOW maps to AUTONOMOUS policy, HIGH maps to GATED policy
-4. If AUTONOMOUS level + AUTONOMOUS policy → call approve() immediately
-5. If OBSERVATION level, or AUTONOMOUS level + GATED policy → schedule countdown
+3. Resolve effective policy via autonomyResolver.resolvePolicy(actionType)
+4. If AUTONOMOUS level + AUTONOMOUS policy → call autoExecute(actionId)
+5. If OBSERVATION level, or AUTONOMOUS level + GATED policy →
+   persist countdown_ends_at, schedule countdown via CountdownScheduler
 ```
 
 The action always hits PROPOSED first and is always broadcast via SSE.
 The UI sees every action, even ones that auto-execute — the feed is a
 complete audit record.
 
-### Countdown Mechanism
+### autoExecute() — Bypass the Risk Gate
 
-A `ScheduledExecutorService` in `ActionService` (single-threaded, same
-as the existing action executor thread).
+`approve()` contains a risk gate: HIGH-risk actions go to CONFIRMING,
+requiring a second confirmation step. This is correct for human-
+initiated approval. But when the system decides to auto-execute (either
+immediately or after a countdown), it has already evaluated the
+autonomy policy — the risk gate would send GATED actions to CONFIRMING
+with nobody to confirm.
 
 ```java
-record PendingCountdown(String actionId, ScheduledFuture<?> future) {}
-private final Map<String, PendingCountdown> countdowns = new ConcurrentHashMap<>();
+void autoExecute(String actionId) {
+    // Optimistic lock: only transition if still PROPOSED
+    int updated = updateStatusCas(actionId, PROPOSED, APPROVED);
+    if (updated == 0) return; // already transitioned (veto, expiry, race)
+    var action = getAction(actionId);
+    executeAction(action); // submits to action executor thread
+}
 ```
 
-When the timer fires: re-read the action from the DB. If still PROPOSED,
-call `approve()`. If already REJECTED or EXPIRED (user vetoed or state
-changed), do nothing. The DB is the source of truth — the timer doesn't
-hold state.
+`autoExecute()` is an internal method — not exposed via REST. The user
+approval path (`approve()`) is unchanged and still enforces the risk
+gate for manual approvals.
+
+### Optimistic Locking
+
+All state transitions use compare-and-swap on the database:
+
+```sql
+UPDATE coordinator_actions SET status = ?, resolved_at = ?,
+  execution_result = ? WHERE id = ? AND status = ?
+```
+
+The trailing `AND status = ?` is the CAS. If the row was already
+transitioned (by a race between timer and manual approve, or between
+timer and veto), the UPDATE affects 0 rows and the caller returns
+without executing. This eliminates double-execution races.
+
+### Countdown Persistence and Restart Recovery
+
+`countdown_ends_at` is persisted in the `coordinator_actions` table
+(new nullable column). This serves two purposes:
+
+1. **Restart recovery:** On startup, `ActionService` sweeps PROPOSED
+   actions with a non-null `countdown_ends_at`:
+   - If the deadline has passed → call `autoExecute(actionId)`
+   - If the deadline is in the future → reschedule with remaining time
+2. **SSE reconnect recovery:** The REST endpoint
+   `GET /api/coordinator/actions/{id}` returns `countdown_ends_at` so
+   the frontend can recover the countdown timer after reconnection.
+
+Schema addition:
+```sql
+ALTER TABLE coordinator_actions ADD COLUMN countdown_ends_at TEXT;
+```
+
+### Mode-Switch Countdown Cancellation
+
+When the autonomy level changes to MANUAL (via the session toggle or
+preference update), `ActionService` calls
+`countdownScheduler.cancelAll()` and clears `countdown_ends_at` for
+all PROPOSED actions with active countdowns. Actions remain in PROPOSED
+— the user must now approve them manually.
+
+When switching from MANUAL to OBSERVATION or AUTONOMOUS, existing
+PROPOSED actions are NOT retroactively given countdowns. Only newly
+proposed actions use the new level.
+
+### approve() — Unchanged for Manual Path
+
+`approve()` retains the risk gate for human-initiated approvals:
+HIGH-risk → CONFIRMING, LOW-risk → EXECUTING. It also uses the CAS
+update to prevent races with concurrent `autoExecute()`.
 
 ### Veto During Countdown
 
-The existing `reject()` method works unchanged. After rejection, the
-timer fires, reads REJECTED from DB, and is a no-op. The `countdowns`
-map entry is cleaned up on the next fire or on a periodic sweep.
+The existing `reject()` method works unchanged with CAS. After
+rejection, the timer fires, the CAS fails (status is REJECTED, not
+PROPOSED), and the timer is a no-op. The `countdowns` map entry is
+cleaned up on fire.
 
 ### Auto-Expiry During Countdown
 
-Same pattern — `expireStale()` transitions to EXPIRED, the timer fires
-and sees a terminal state.
+Same pattern — `expireStale()` transitions to EXPIRED via CAS, the
+timer fires and the CAS fails.
 
 ### SSE Payload Extension
 
 When a countdown starts, the SSE broadcast for `coordinator:action`
-includes a `countdownEndsAt` ISO-8601 timestamp. This is transient
-metadata on the broadcast, not persisted in the `ProposedAction` record
-or the `coordinator_actions` table. The frontend uses it to render the
-countdown timer.
+includes `countdownEndsAt` from the persisted column. The frontend
+also recovers this value from the REST endpoint on SSE reconnect.
 
 ## §4 Circuit Breaker & Safety
 
 ### Existing Mitigation (Unchanged)
 
 `SignificanceFilter` suppresses batches containing only action/lifecycle
-events when the count exceeds 5 per window. Terminal state events
-(EXPIRED, REJECTED) are excluded from the accumulator entirely.
+events when the count exceeds the threshold per window. Terminal state
+events (EXPIRED, REJECTED) are excluded from the accumulator entirely
+— they are not added to the accumulator in the first place (filtered
+in `CoordinatorEventObserver` before accumulation, not filtered after).
 
 ### Autonomous Execution Rate Limit
 
-`ActionService` tracks autonomous executions per rolling window.
-Default: 5 actions per 60 seconds (configurable via preferences).
-
-When the limit is hit, subsequent actions fall back to observation mode
-(countdown) instead of auto-executing. The rate limit resets when:
-- The window rolls over
-- A human explicitly approves an action (signal that the coordinator
-  is on track)
+`ActionService` tracks autonomous executions using a sliding window
+of timestamps:
 
 ```java
-private final AtomicInteger autonomousActionsInWindow = new AtomicInteger(0);
+private final Deque<Instant> autonomousExecutionTimestamps =
+    new ConcurrentLinkedDeque<>();
 ```
+
+On each autonomous execution, the current timestamp is appended.
+Before executing, timestamps older than the window duration are
+pruned. If the remaining count exceeds the limit, the action falls
+back to observation mode (countdown) instead of auto-executing.
+
+Defaults: 5 actions per 60 seconds (configurable via preferences:
+`coordinator.rateLimitMaxActions`, `coordinator.rateLimitWindowSeconds`).
+
+The rate limit resets (clears all timestamps) when a human explicitly
+approves an action — this is a signal that the coordinator is on track
+and the rate limit was being overly cautious.
 
 This is a backstop, not a throttle. Under normal operation it never
 fires. It catches the degenerate case where the coordinator proposes,
@@ -209,18 +376,19 @@ tight loop.
 
 ### Prompt Extension
 
-`CoordinatorPrompts.systemPrompt()` is extended to inform the LLM of
-the current autonomy mode:
+`CoordinatorPrompts.systemPrompt()` becomes parameterized — it accepts
+the current `AutonomyLevel` and includes mode-specific guidance:
 
-```
-The coordinator is in {OBSERVATION|AUTONOMOUS} mode. LOW-risk actions
-will {execute after a countdown|execute immediately}. Be more selective
-about proposing actions — only propose when confidence is high, since
-actions may execute without explicit approval.
-```
+- **MANUAL:** No additional prompt (L2 behaviour unchanged).
+- **OBSERVATION:** "Actions will execute after a countdown unless the
+  user vetoes. Be selective — only propose when confidence is high."
+- **AUTONOMOUS:** "LOW-risk actions execute immediately. HIGH-risk
+  actions execute after a countdown. Only propose actions when there
+  is clear justification."
 
-This makes the LLM more conservative about proposals when it knows they
-may auto-execute — a soft guard on top of the hard rate limit.
+`CoordinatorService` passes the resolved autonomy level when
+assembling the prompt. The existing `systemPrompt()` call sites
+are updated to `systemPrompt(autonomyLevel)`.
 
 ## §5 Notifications
 
@@ -267,54 +435,71 @@ per `actionKey`.
 
 ### Unit Tests (no tmux, no LLM)
 
-- **AutonomyResolutionTest** — effective policy resolution: risk-based
+- **AutonomyResolverTest** — effective policy resolution: risk-based
   defaults, override promotes LOW→GATED, override demotes
   HIGH→AUTONOMOUS, missing override falls through to risk. Autonomy
   level × policy matrix (MANUAL/OBSERVATION/AUTONOMOUS ×
-  GATED/AUTONOMOUS) produces correct behaviour.
-- **CountdownTest** — schedule countdown, verify fires and auto-approves.
-  Veto during countdown, timer is no-op. Expiry during countdown, timer
-  is no-op. Race condition: action already executed, no double-execute.
+  GATED/AUTONOMOUS). Session override takes precedence over preference.
+  Reset clears override. Per-workspace preference lookup.
+- **CountdownSchedulerTest** — schedule countdown, verify fires
+  callback. Cancel before fire, verify no callback. cancelAll clears
+  all pending. Deadline query returns correct time. Exception in
+  callback does not kill scheduler.
+- **CountdownRecoveryTest** — simulate restart: PROPOSED actions with
+  countdown_ends_at in the past → autoExecute called. Future deadline
+  → rescheduled with remaining time. Null countdown_ends_at → skipped.
+- **OptimisticLockTest** — concurrent autoExecute and manual approve
+  on same action: only one succeeds (CAS). Concurrent autoExecute and
+  reject: reject wins, autoExecute is no-op. Concurrent autoExecute
+  and expiry: expiry wins.
 - **RateLimitTest** — autonomous executions within limit proceed.
-  Exceeding limit falls back to observation. Window rollover resets
-  counter. Manual approval resets counter.
+  Exceeding limit falls back to observation countdown. Window slides
+  — old timestamps pruned. Manual approval resets all timestamps.
 - **ActionServiceAutonomyTest** — propose() in MANUAL mode leaves
   PROPOSED. propose() in AUTONOMOUS + LOW-risk auto-executes.
   propose() in AUTONOMOUS + HIGH-risk schedules countdown. propose()
-  in OBSERVATION mode always schedules countdown.
-- **SessionAutonomyToggleTest** — session override takes precedence
-  over preference. Reset clears override. Default used when no override.
+  in OBSERVATION mode always schedules countdown. countdown_ends_at
+  persisted on countdown schedule.
+- **ModeSwitchTest** — switch to MANUAL cancels all countdowns, clears
+  countdown_ends_at, actions remain PROPOSED. Switch from MANUAL to
+  OBSERVATION does not retroactively countdown existing PROPOSED.
+- **PreferencesServiceTest** — reads valid JSON. Defaults on missing
+  file. Defaults on malformed JSON. Per-workspace autonomy lookup.
+  Global overrides lookup. Rate limit config.
 
 ### Integration Tests (`@QuarkusTest`)
 
 - **CoordinatorResourceAutonomyTest** — GET/POST autonomy endpoints.
   Toggle level, verify subsequent proposals follow the new level.
-  Reset returns to default.
+  Reset returns to default. Workspace parameter on GET.
 - **ObservationCountdownIntegrationTest** — propose action in
-  observation mode, verify SSE includes `countdownEndsAt`, verify
-  auto-execution after delay, verify veto cancels execution.
+  observation mode, verify countdown_ends_at persisted, verify
+  auto-execution after delay, verify veto cancels execution. SSE
+  reconnect: GET returns countdown_ends_at for recovery.
 
 ### Frontend
 
 - Manual browser verification: mode toggle, countdown timer rendering,
-  auto badge on autonomous completions, veto during countdown.
+  auto badge on autonomous completions, veto during countdown, timer
+  recovery on page refresh.
 
 ## §8 Scope Boundary
 
 ### In scope
-- `AutonomyLevel` enum and effective policy resolution (hybrid risk +
-  overrides)
-- Preferences persistence for autonomy level, countdown duration,
-  overrides
-- Session-level autonomy toggle with REST API
-- Observation countdown mechanism in `ActionService`
-- Autonomous auto-execution path in `ActionService.propose()`
-- Rate limiter as circuit breaker backstop
+- `AutonomyLevel`, `AutonomyOverride` enums
+- `AutonomyResolver` — encapsulates policy resolution, holds session state
+- `CountdownScheduler` — countdown timer lifecycle, extracted from ActionService
+- `PreferencesService` (`io.hortora.trellis.config`) — `~/.trellis/preferences.json`
+- `ActionService.autoExecute()` — risk-gate-bypassing autonomous path
+- Optimistic locking (CAS) on all action state transitions
+- Countdown persistence (`countdown_ends_at` column) and restart recovery
+- Mode-switch countdown cancellation
+- Sliding-window rate limiter as circuit breaker backstop
 - Platform notification wiring for autonomous action completions
-- Coordinator panel mode toggle
+- Parameterized `CoordinatorPrompts.systemPrompt(AutonomyLevel)`
+- Coordinator panel mode toggle (session override)
 - Countdown timer and auto badge on advice cards
-- Prompt extension for autonomy-aware LLM behaviour
-- SSE payload extension with `countdownEndsAt`
+- SSE payload + REST endpoint for countdown recovery on reconnect
 
 ### Out of scope
 - ISX integration (paused — will be raised separately)
