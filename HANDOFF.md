@@ -2,16 +2,12 @@
 
 ## Last Session
 
-Closed `issue-18-llm-coordinator-l3-isx` branch (4 commits squashed to 2). L3 autonomous execution landed on main:
-- #18 LLM Coordinator L3 — three autonomy levels (MANUAL/OBSERVATION/AUTONOMOUS), CAS transitions, CountdownScheduler, rate limiter, restart recovery, frontend mode toggle
+Closed `issue-22-slot-agent-coordination` branch (8 commits squashed to 2). Slot-agent coordination landed on main:
+- #22 Slot-agent coordination — SlotAgentCoordinator cascades pause/resume/end to agents, graceful shutdown (Escape→/exit→treeKill), PAUSED_BY_COORDINATOR provenance, advisory memory pressure eviction queue with frontend badges and system pressure banner
 
-Code review caught two critical issues (both fixed before merge):
-1. TOCTOU race on approve/reject/confirm/cancel — converted all transitions to CAS
-2. autoExecute() blocking the countdown scheduler thread — offloaded to dedicated action executor
+Design review (light, 4 dimensions) caught 10 findings — slot-level lock, PAUSED_BY_COORDINATOR provenance, parallel shutdowns, macOS memory API, poll cycle race, and more. All addressed before implementation.
 
-Blog entry: "When the Coordinator Stops Asking Permission" — covers CAS concurrency, countdown persistence, rate limiting as circuit breaker.
-
-Garden entry: GE-20260803-0c6c56 (IntelliJ MCP ide_change_signature fails on record constructors).
+Blog entry: "When Pause Means Pause" — covers coordinator design, graceful shutdown sequence, advisory vs automatic eviction.
 
 ## What's Next
 
@@ -20,17 +16,12 @@ Garden entry: GE-20260803-0c6c56 (IntelliJ MCP ide_change_signature fails on rec
 | #19 | Velocity Tracking + Projections | M | Med | Ready |
 | #16 | Drafthouse Integration (B6c) | M | Med | Ready |
 | #21 | End-to-end provenance test path | S | Low | Ready |
-| #22 | Slot-agent pause/resume coordination | M | Med | Enhancement |
 
 ## Epic Progress
 
-Batches 1-8 complete. #14, #15, #17, #18, #20 complete and landed. Remaining: #16, #19.
-
-ISX (originally part of #18) was deferred — the design spec explicitly scoped it out. Will be raised as a separate issue when needed.
+Batches 1-8 complete. #14, #15, #17, #18, #20, #22 complete and landed. Remaining: #16, #19.
 
 ## References
 
-- Design spec: `docs/specs/issue-18-llm-coordinator-l3-isx/2026-08-02-llm-coordinator-l3-design.md`
-- Blog: `blog/2026-08-03-mdp03-when-the-coordinator-stops-asking-permission.md`
-- Garden entry: GE-20260803-0c6c56 (ide_change_signature record constructor gotcha)
-- Unrecovered specs from epic-2-post-mvp: process-isolation, artifact-browser, L2 coordinator (3 specs on closed workspace branch)
+- Design spec: `docs/specs/issue-22-slot-agent-coordination/2026-08-03-slot-agent-coordination-design.md`
+- Blog: `blog/2026-08-03-mdp04-when-pause-means-pause.md`
