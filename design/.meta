@@ -1,0 +1,10 @@
+branch: issue-26-protocol-management-panel
+state: scaffolded
+project-sha: 6ccd960212158b0ed29c973c66379c4298efcf42
+date: 2026-08-04
+issue: 26
+issue-repo: Hortora/trellis
+covers: 26
+flyway-next-v: none
+design-repo: project
+design-section-hashes: 
