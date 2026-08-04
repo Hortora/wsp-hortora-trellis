@@ -1,0 +1,10 @@
+branch: issue-24-repo-terminal-integration
+state: scaffolded
+project-sha: 432e993b1a48364b04c78fdfb61eb1add41eab5e
+date: 2026-08-04
+issue: 24
+issue-repo: Hortora/trellis
+covers: 24
+flyway-next-v: none
+design-repo: project
+design-section-hashes: 
