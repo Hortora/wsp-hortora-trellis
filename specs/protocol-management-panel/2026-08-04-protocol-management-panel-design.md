@@ -14,43 +14,29 @@ editable.
 
 ## Data Model
 
-Three layers:
+Two layers:
 
-### 1. Curated Lists Registry
-
-A file in hortora's garden (`PROTOCOL-LISTS.md`) that catalogs notable
-reusable protocol lists with metadata:
-
-```markdown
-| Label | Description | Path |
-|-------|-------------|------|
-| Universal Java/Quarkus | Reusable conventions for any Java/Quarkus project | casehub/garden/docs/protocols/universal/INDEX.md |
-| CaseHub Foundation | Platform building protocols | casehub/garden/docs/protocols/casehub/FOUNDATION-INDEX.md |
-| CaseHub Harness | App building protocols | casehub/garden/docs/protocols/casehub/HARNESS-INDEX.md |
-```
-
-Each entry has:
-- **Label** — display name
-- **Description** — what the list covers and who it's for
-- **Path** — INDEX.md location (relative to org root or absolute)
-
-### 2. Index Files (INDEX.md)
+### 1. Index Files (INDEX.md)
 
 Curated lists of protocol entries. Markdown tables with columns:
 
 ```markdown
-| File | Summary | Applies To |
-|------|---------|------------|
+| File | Rule | Applies To |
+|------|------|------------|
 | [slug.md](slug.md) | One-line directive | Which modules / when |
 ```
+
+Column headers vary across repos (`Rule` vs `Summary` vs `Rule Summary`).
+The parser matches on pipe-delimited structure, not header names.
 
 Two shapes:
 - **Direct listing** — INDEX.md contains section-grouped tables of protocol entries (soredium pattern)
 - **Router** — INDEX.md points to sub-tier INDEX.md files which contain the actual entry tables (garden pattern)
 
-Sub-indexes are detected by rows where the linked file is itself an INDEX.md.
+Sub-indexes are detected by rows where the linked file contains `INDEX` in
+its name (e.g., `INDEX.md`, `FOUNDATION-INDEX.md`, `HARNESS-INDEX.md`).
 
-### 3. Protocol Entries (.md files)
+### 2. Protocol Entries (.md files)
 
 Individual protocol rules with YAML frontmatter:
 
@@ -75,30 +61,37 @@ One paragraph. The directive.
 A repo has protocols if and only if `docs/protocols/INDEX.md` exists.
 No configuration needed — the path is the convention.
 
-### Two discovery paths
+### Discovery
 
-1. **Registry path** — read `PROTOCOL-LISTS.md` from the garden to get the
-   catalog of notable curated lists with labels and descriptions. This is the
-   primary browse experience.
+Two complementary paths:
 
-2. **Local path** — scan repos on disk for `docs/protocols/INDEX.md`. From
-   the project root's parent (the org directory), find all child directories
-   with `.git/` and check each for the convention path. Supplements the
-   registry with locally-discovered lists not in the catalog.
+1. **Local scanning** — reuse `WorkspaceScanner`'s existing repo discovery
+   (finds child directories with `.git/`). For each discovered repo, check
+   if `docs/protocols/INDEX.md` exists. No duplicate repo-sniffing logic.
+
+2. **Curated registry** (future) — a `PROTOCOL-LISTS.md` file in hortora's
+   garden cataloging notable reusable protocol lists with label, description,
+   and path metadata. Deferred to a follow-up — local scanning covers the
+   primary use case. When added, registry entries supplement locally-discovered
+   lists with curated metadata.
 
 ### INDEX.md chain walking
 
 When a curated list is selected:
 1. Read the INDEX.md file
 2. Parse markdown table rows (pipe-delimited, regex extraction)
-3. For each row: if the linked file is another INDEX.md, follow it recursively
-4. Collect all terminal protocol entries with: file path, summary, applies-to, resolved absolute path
+3. For each row: if the linked file contains `INDEX` in its name, follow it
+   recursively. Track visited paths in a `Set<Path>` to detect cycles.
+4. Collect all terminal protocol entries with: file path, summary, applies-to,
+   resolved absolute path
 5. Section headers (`## Heading`) above tables are preserved as grouping metadata
 
 ### File watching
 
-Existing `DirectoryWatcher` pattern triggers rescan when any file under
-`docs/protocols/` changes in a watched repo.
+Integrate with existing `FileWatcherService`. Add `docs/protocols/` to the
+watched paths. Emit a new SSE topic (`workspace:protocols`) on changes.
+Debounce write-triggered events — when `ProtocolService` writes a file, set
+a flag to suppress the immediate watcher callback and avoid feedback loops.
 
 ## REST API
 
@@ -106,21 +99,34 @@ New `ProtocolResource` at `/api/protocols`:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/protocols/registry` | GET | Curated lists catalog from garden's `PROTOCOL-LISTS.md` |
+| `/api/protocols/repos?root=<path>` | GET | List repos with `docs/protocols/INDEX.md` under the given root. Reuses `WorkspaceScanner` repo discovery. |
 | `/api/protocols/indexes?repo=<path>` | GET | Discover all INDEX.md files under a repo's `docs/protocols/` |
 | `/api/protocols/entries?index=<path>` | GET | Parse an INDEX.md (chain-walk), return all protocol entries |
-| `/api/protocols/content?path=<path>` | GET | Serve a protocol `.md` file's raw content |
 | `/api/protocols/entries` | POST | Add entry: row to INDEX.md + optional .md creation + git commit |
-| `/api/protocols/entries` | DELETE | Remove entry: row from INDEX.md + git commit (file stays on disk) |
+| `/api/protocols/entries?index=<path>&file=<slug>` | DELETE | Remove entry: row from INDEX.md + git commit (file stays on disk) |
+
+**Content serving:** reuse the existing `ArtifactResource` endpoint
+(`GET /api/artifacts/content?path=...&root=...`) for reading protocol `.md`
+files. No duplicate content endpoint.
+
+**Path security:** all path parameters are validated against a whitelist of
+known repo roots (from `WorkspaceScanner`). Paths must resolve within a known
+repo's `docs/protocols/` directory. Reuse `ArtifactResource`'s existing path
+traversal guards (canonical path comparison).
+
+**Write serialization:** `ProtocolService` synchronizes write operations on
+a per-INDEX.md lock (`ConcurrentHashMap<Path, ReentrantLock>`) to prevent
+concurrent modifications to the same file.
 
 ### Backend classes
 
-- **`ProtocolScanner`** — discovers repos with protocols, parses INDEX.md tables,
-  follows sub-index links. Returns structured data.
+- **`ProtocolScanner`** — parses INDEX.md tables, follows sub-index links
+  with cycle detection. Returns structured data. Does NOT duplicate repo
+  discovery — receives repo paths from `WorkspaceScanner`.
 - **`ProtocolResource`** — JAX-RS resource exposing the REST API.
 - **`ProtocolService`** — orchestrates write operations: INDEX.md editing,
-  file creation, git commit.
-- **`ProtocolRegistry`** — reads and caches the garden's `PROTOCOL-LISTS.md`.
+  file creation, git commit. Shells out to `git` for commits (new capability
+  for trellis sidecar — first write operation). Serializes writes per-file.
 
 ## Frontend Panel
 
@@ -134,9 +140,11 @@ in `workbench.ts`. Hash route: `#protocols`.
 Two-column layout matching the garden view pattern (CSS grid, `1fr 1fr`):
 
 **Left column:**
-- **Curated lists browser** — cards/rows from the registry, each showing
-  label and description. Click to select a list.
-- **Protocol entries table** — for the selected list, shows entries parsed
+- **Repo selector** — dropdown or list of repos that have protocols (from
+  `/api/protocols/repos`). Click to select.
+- **Index list** — for the selected repo, shows all INDEX.md files found
+  under `docs/protocols/`. Click to select an index.
+- **Protocol entries table** — for the selected index, shows entries parsed
   from the INDEX.md chain. Each row: file name, summary, applies-to.
   Remove button per row.
 - **Add action** — button that opens garden search for finding entries
@@ -156,9 +164,10 @@ Two-column layout matching the garden view pattern (CSS grid, `1fr 1fr`):
 ### Interaction flows
 
 **Browse:**
-1. Panel loads → fetches registry → shows curated lists
-2. Click a list → fetches entries → shows protocol table
-3. Click an entry → loads `.md` content → shows detail
+1. Panel loads → fetches repos with protocols → shows repo list
+2. Click a repo → fetches its indexes → shows index list
+3. Click an index → fetches entries → shows protocol table
+4. Click an entry → loads `.md` content via `/api/artifacts/content` → shows detail
 
 **Add from garden:**
 1. Click "Add" → garden search bar appears (inline or overlay)
@@ -197,19 +206,21 @@ Steps:
 
 ### Remove entry from INDEX.md
 
-DELETE body:
-```json
-{
-  "indexPath": "/abs/path/to/INDEX.md",
-  "file": "protocol-slug.md"
-}
-```
+DELETE `/api/protocols/entries?index=<path>&file=<slug>` (query params, no body).
 
 Steps:
 1. Parse INDEX.md, find and remove the row matching the file
 2. `git add` INDEX.md, `git commit` with message
    `"protocol: remove <slug> from <index-name>"`
 3. The `.md` file is NOT deleted
+
+### Error handling
+
+Write operations (add/remove) are atomic at the INDEX.md level:
+- Read the file, apply the edit in memory, write back
+- If the git commit fails, restore the original file content from the
+  in-memory copy (no partial state on disk)
+- Return 500 with error detail on failure
 
 ### Garden entry → protocol transformation
 
@@ -223,18 +234,32 @@ When promoting a garden entry:
 - `applies_to` → from garden entry domain or user-provided
 - Body → garden entry body carried across
 
-### Registry management
-
-The `PROTOCOL-LISTS.md` file in the garden is itself editable through the
-panel — add/remove curated list entries. Same auto-commit pattern, committed
-to the garden repo.
-
 ## Testing Strategy
 
 - **ProtocolScanner** unit tests: parse known INDEX.md formats (direct listing,
-  router, nested sub-indexes), handle malformed tables gracefully
+  router, nested sub-indexes), handle malformed tables gracefully, cycle
+  detection, varying column headers (`Rule` vs `Summary`)
+- **ProtocolService** unit tests: add row to correct section, remove row,
+  handle edge cases (empty section, last row in section), rollback on
+  git commit failure
 - **ProtocolResource** integration tests: CRUD operations, path traversal
-  protection
-- **INDEX.md editing** unit tests: add row to correct section, remove row,
-  handle edge cases (empty section, last row in section)
+  protection, write serialization
 - **Frontend** manual testing: browse, select, detail view, add/remove flows
+
+## Review Findings Incorporated
+
+From light post-spec review (2026-08-04):
+
+- Dropped `PROTOCOL-LISTS.md` registry as premature — local scanning covers
+  the primary use case (STR R1-05, XC R1-04). Registry deferred to follow-up.
+- Reuse `WorkspaceScanner` for repo discovery instead of duplicating (STR R1-02)
+- Reuse `ArtifactResource` for content serving instead of new endpoint (STR R1-03)
+- Added cycle detection to INDEX.md chain walking (ROB R1-04)
+- Added path traversal security — whitelist of known repo roots (ROB R1-05)
+- Added write serialization via per-file locks (ROB R1-01)
+- Added rollback on partial write failure (ROB R1-03)
+- Added file watcher debouncing to prevent feedback loops (ROB R1-02)
+- Changed DELETE to use query params instead of request body (ROB R1-07)
+- Fixed table column header to match real INDEX.md files (XC R1-12)
+- Git writes via shelling out to `git` — first write operation in trellis
+  sidecar, documented as architectural precedent (STR R1-04, ROB R1-15)
