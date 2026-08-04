@@ -2,7 +2,7 @@
 
 ## Last Session
 
-Closed #24 (repo terminal integration). Fixed terminal display corruption (capture-pane → pipe-pane + forceRedraw), UTF-8 boundary splitting (FifoRelay), WebSocket connection stability (repo-detail reconfigure guard, mousedown listener leaks). Built memory management panel with two-table layout (active terminals + available repos), process tree sidebar, pages-data-table with casehub-dark theme, compact density. Filed casehub-pages#286 (focus management) and #288 (paginated mode height).
+Built #26 (protocol management panel). New dock-bar panel for browsing and curating protocol INDEX.md files across repos. Scanner discovers repos with `docs/protocols/INDEX.md`, parses tiered INDEX.md chains with cycle detection. REST API with add/remove operations that auto-commit to git. Frontend with accordion repo list, garden-style entry rows, split-pane layout, and full-panel garden search for adding entries. Also fixed pre-existing SSE event listener mismatch in repo-detail and slot-detail (addEventListener for named events on unnamed SSE data — switched to onmessage).
 
 ## Immediate Next Step
 
@@ -18,6 +18,5 @@ Pick next feature from What's Next — velocity tracking or drafthouse integrati
 
 ## References
 
-- Issue: #24 (closed)
-- casehub-pages#286 — PagesTerminal focus management (open)
-- casehub-pages#288 — paginated mode height (open)
+- Issue: #26 (closed)
+- Spec: `docs/specs/protocol-management-panel/2026-08-04-protocol-management-panel-design.md`
