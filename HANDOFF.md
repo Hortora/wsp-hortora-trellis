@@ -2,22 +2,28 @@
 
 ## Last Session
 
-Closed #23 (workspace UX improvements) — manual testing session via Playwright alongside Electron. Fixed 12+ issues across backend, shell, and frontend: tilde expansion, scan hang on large workspaces, workbench state destruction on navigation, garden scroll, markdown rendering, dock bar cleanup, repo/slot navigation with back buttons, health monitor for sidecar reconnection.
+Built repo terminal integration (#24) — repos are now first-class work targets with Claude agent terminals. Replaced custom terminal-panel.ts with shared PagesTerminal from casehub-packages. Fixed scanner to use `slots/` instead of `worktrees/`. Fixed terminal rendering (xterm CSS in shadow DOM, cursor repositioning, focus through nested shadow roots, tmux working directory).
 
 ## Immediate Next Step
 
-Next feature: terminal integration for repos and slots. The user explicitly said "terminals to work on repos and slots" is what comes next.
+Branch `issue-24-repo-terminal-integration` is still open. Terminal rendering has a residual garbling issue on reconnect when browser width differs from tmux pane width. Need Playwright visual tests (#25) before further fixes. Run `/work` to continue.
+
+## What's Left
+
+- Terminal garbling on reconnect at different widths · S · Med
+- Playwright visual test suite (#25) · M · Med
+- Lifecycle buttons (end/next) on repo detail toolbar · S · Med
 
 ## What's Next
 
 | # | Description | Scale | Complexity | Notes |
 |---|-------------|-------|------------|-------|
-| — | Terminal integration for repos/slots | M | Med | User's stated next priority |
+| #25 | Playwright visual tests for terminal rendering | M | Med | Created this session |
 | #19 | Velocity Tracking + Projections | M | Med | Ready |
 | #16 | Drafthouse Integration (B6c) | M | Med | Ready |
-| #21 | End-to-end provenance test path | S | Low | Ready |
 
 ## References
 
-- Issue: #23 (closed)
-- Commits: 2c9d479, acfa481, 432e993
+- Spec: `specs/repo-terminal-integration/`
+- Issue: #24 (open), #25 (open)
+- Commits: 009c568..83b7973 (9 commits)
