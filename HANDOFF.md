@@ -2,28 +2,22 @@
 
 ## Last Session
 
-Built repo terminal integration (#24) — repos are now first-class work targets with Claude agent terminals. Replaced custom terminal-panel.ts with shared PagesTerminal from casehub-packages. Fixed scanner to use `slots/` instead of `worktrees/`. Fixed terminal rendering (xterm CSS in shadow DOM, cursor repositioning, focus through nested shadow roots, tmux working directory).
+Closed #24 (repo terminal integration). Fixed terminal display corruption (capture-pane → pipe-pane + forceRedraw), UTF-8 boundary splitting (FifoRelay), WebSocket connection stability (repo-detail reconfigure guard, mousedown listener leaks). Built memory management panel with two-table layout (active terminals + available repos), process tree sidebar, pages-data-table with casehub-dark theme, compact density. Filed casehub-pages#286 (focus management) and #288 (paginated mode height).
 
 ## Immediate Next Step
 
-Branch `issue-24-repo-terminal-integration` is still open. Terminal rendering has a residual garbling issue on reconnect when browser width differs from tmux pane width. Need Playwright visual tests (#25) before further fixes. Run `/work` to continue.
-
-## What's Left
-
-- Terminal garbling on reconnect at different widths · S · Med
-- Playwright visual test suite (#25) · M · Med
-- Lifecycle buttons (end/next) on repo detail toolbar · S · Med
+Pick next feature from What's Next — velocity tracking or drafthouse integration are both ready.
 
 ## What's Next
 
 | # | Description | Scale | Complexity | Notes |
 |---|-------------|-------|------------|-------|
-| #25 | Playwright visual tests for terminal rendering | M | Med | Created this session |
 | #19 | Velocity Tracking + Projections | M | Med | Ready |
 | #16 | Drafthouse Integration (B6c) | M | Med | Ready |
+| #21 | End-to-end provenance test path | S | Low | Ready |
 
 ## References
 
-- Spec: `specs/repo-terminal-integration/`
-- Issue: #24 (open), #25 (open)
-- Commits: 009c568..83b7973 (9 commits)
+- Issue: #24 (closed)
+- casehub-pages#286 — PagesTerminal focus management (open)
+- casehub-pages#288 — paginated mode height (open)
