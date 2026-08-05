@@ -1,0 +1,10 @@
+branch: issue-27-agent-control-plane
+state: scaffolded
+project-sha: 1e64dc7c4c813cfdeaa69ed2a09b0c1a9c82fdd3
+date: 2026-08-05
+issue: 27
+issue-repo: Hortora/trellis
+covers: 27
+flyway-next-v: none
+design-repo: workspace
+design-section-hashes: 
