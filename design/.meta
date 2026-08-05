@@ -1,0 +1,10 @@
+branch: issue-29-dockview-shadow-dom-fix
+state: scaffolded
+project-sha: 273c4f2fce92bccd8fdf80b9f7108d3ead950212
+date: 2026-08-05
+issue: 29
+issue-repo: Hortora/trellis
+covers: 29
+flyway-next-v: none
+design-repo: workspace
+design-section-hashes: 
