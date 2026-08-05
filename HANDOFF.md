@@ -1,22 +1,23 @@
 # Handoff — trellis
 
+*Updated: #29 closed — removed from backlog.*
+
 ## Last Session
 
 Built #28 (workspace view) — full multi-frame terminal workspace with Dockview, keyboard nav, organisers, persistence, detach/reattach. Adversarial design review (51 issues, all resolved, $36). Full-stack implementation across Java/Electron/TypeScript. Fixed tilde expansion bug in protocol/artifact endpoints (#29 filed for Dockview shadow DOM rendering). Filed #27 (agent control plane). Blog published to mdproctor.github.io.
 
 ## Immediate Next Step
 
-Fix #29 — Dockview v7 panels render at zero height inside Lit shadow DOM. This is the only blocker for the workspace view being visually functional. Investigation needed: shadow DOM CSS inheritance, Dockview theme variables, possible HTMLElement base class instead of LitElement.
+Pick the next issue. #27 (Agent Control Plane) is the highest-value open work — rich data model with ~6-8 MCP tools. Run `/work` to start.
 
 ## What's Left
 
-- #29 Dockview shadow DOM rendering — zero-height panels · S · Med
+*None — #29 closed.*
 
 ## What's Next
 
 | # | Description | Scale | Complexity | Notes |
 |---|-------------|-------|------------|-------|
-| #29 | Fix Dockview shadow DOM rendering | S | Med | Blocker for workspace view |
 | #27 | Agent Control Plane — programmatic API | M | Med | Rich data model, ~6-8 MCP tools |
 | #19 | Velocity Tracking + Projections | M | Med | Ready |
 | #16 | Drafthouse Integration (B6c) | M | Med | Ready |
