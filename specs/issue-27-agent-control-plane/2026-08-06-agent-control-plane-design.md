@@ -131,21 +131,42 @@ concern.
 
 The MCP `trellis_terminal` tool with `operation=read-log` reads the file.
 Parameters: `name` (terminal name), `lines` (last N lines, default 50),
-`offset` (start from line N for pagination). Returns raw text.
+`offset` (start from line N for pagination). A "line" is `\n`-delimited —
+raw terminal output including `\r` and ANSI sequences within a line is
+preserved. Returns raw text.
+
+Implementation uses `RandomAccessFile` seeking backwards from the end of
+the file to locate the requested line boundaries. Read cost is O(bytes
+returned), not O(file size).
 
 ### Input Logging
 
-Commands sent — whether by human via WebSocket or coordinator via `sendKeys`
-— are also logged, interleaved with output so the log reads like a complete
-session transcript. No differentiation by source — the terminal doesn't know
-who typed, the log shouldn't either.
+Terminal echo handles most cases — input typed via WebSocket or sent via
+`sendKeys` appears in the pipe-pane output and thus in the session log
+whenever the terminal application echoes it. This covers normal shell
+interaction.
+
+For MCP-initiated input (`trellis_terminal` `send-input`), the sidecar
+also writes a bracketed marker directly to the log file before sending the
+keys to tmux: `\x1b[?2004h<input text>\x1b[?2004l`. This ensures the
+coordinating agent can always reconstruct what it sent, even when the
+terminal is in raw mode or suppresses echo (password prompts, curses
+applications). Human-initiated input via WebSocket is NOT separately
+logged — it flows through the terminal echo path only.
 
 ### Lifecycle
 
-Log files are created on first WebSocket data write. They survive terminal
-reconnection (append continues). Cleaned up on terminal destroy via
-`TerminalRegistry.destroySession()` — configurable retention for post-mortem
-analysis (default: delete with terminal).
+Log files are created on first WebSocket data write or first MCP
+`send-input` operation. They survive terminal reconnection (append
+continues).
+
+Cleanup on terminal destroy: `TerminalRegistry.destroySession()` deletes
+the log file at `{sidecar-data-dir}/sessions/{terminalName}.log`. The
+`TerminalInfo` record tracks the log file path. Configurable retention
+via `trellis.session-log.retain-after-destroy` (duration, default: `0s`
+— delete immediately). Non-zero values move the file to
+`{sidecar-data-dir}/sessions/archive/` with a TTL-based cleanup
+scheduler.
 
 ## §3 Frontend State Push
 
@@ -170,6 +191,7 @@ interface UIState {
 interface PanelState {
   visible: boolean;
   content: unknown;
+  lastPushed: number; // Date.now() at push time
 }
 ```
 
@@ -178,6 +200,11 @@ workspace view pushes its frames, tabs, positions. The artifacts panel pushes
 its file list. The dashboard pushes its card states. The sidecar does not parse
 or validate `content` — it stores and serves it as-is. When a panel adds new
 state, the frontend push grows automatically. No backend change needed.
+
+The sidecar enforces a 64KB size limit on serialised `content` per panel.
+Pushes exceeding this are rejected with HTTP 413. The `lastPushed` timestamp
+lets MCP consumers detect stale UI state — if a panel hasn't pushed in the
+last 30 seconds, the model response flags it as `stale: true`.
 
 ### Push Trigger
 
@@ -221,12 +248,18 @@ descriptions. Excludes heavy content (session logs) from responses.
 
 **`trellis_navigate(target)`** — Activate a UI element (panel, frame, tab).
 `target` is a model path. Pushes a `control:navigate` SSE event to the
-frontend. Returns the updated state of the target node.
+frontend with a correlation ID. The tool blocks until the frontend
+acknowledges the navigation by pushing updated UI state tagged with the
+same correlation ID, or until a 5-second timeout expires. Returns the
+post-navigation state of the target node on success, or an error with
+`status: "timeout"` if the frontend does not acknowledge in time.
 
 **`trellis_terminal(name, operation, params?)`** — Terminal I/O. Operations:
 `read-log` (params: lines, offset), `send-input` (params: text), `create`
 (params: workingDir, repo, slot), `destroy`, `resize` (params: cols, rows).
-Delegates to `TerminalRegistry`.
+Delegates to `TerminalRegistry`. All tmux operations propagate exit code
+failures — `TmuxManager.run()` throws on non-zero exit, and the MCP tool
+returns the error to the caller. No silent swallowing.
 
 **`trellis_agent(terminal, operation, params?)`** — Agent lifecycle.
 Operations: `start` (params: command, model, etc.), `stop`, `pause`,
@@ -280,6 +313,17 @@ The Java records ARE the schema. Add a field to `TerminalInfo`, the model
 grows. Add a new record type, wire it into the assembly method, the model
 grows. One place to change.
 
+### Generation Counter
+
+Every model response includes a `generation` field — a monotonically
+increasing `AtomicLong` incremented on any state mutation across the
+service beans (`TerminalRegistry` create/destroy, `AgentProcessManager`
+state transitions, `WorkspaceChanged` CDI events, UI state pushes). The
+model assembly captures the current generation before reading and
+includes it in the response. The agent can compare generations across
+calls to detect intervening mutations — if the generation hasn't changed,
+the state is identical to the last query.
+
 ### Frontend Assembly
 
 The sidecar holds the latest UI state pushed via `POST /api/model/ui-state`.
@@ -306,13 +350,33 @@ resolved by walking the assembled tree. Path segments map to collection names
 and identity keys (terminal name, frame id, panel name). No separate routing
 table — the tree structure IS the routing.
 
+**Error contract:**
+- **Invalid path** (no matching node at any depth): error response with
+  `error: "not_found"` and `path` echoing the requested path.
+- **Partially valid path** (prefix resolves, remainder doesn't): returns the
+  deepest valid node with `resolvedPath` indicating how far resolution got
+  and `unresolvedSuffix` containing the remaining segments.
+- **Numeric segments**: always identity keys, not indices. `frames/0` means
+  "the frame with ID 0", not "the first frame." Frame IDs are stable
+  identifiers assigned at creation. If no frame has ID 0, it's a not-found
+  error.
+
 ### Performance
 
 `trellis_model()` with no path assembles the full tree but excludes heavy
 content (session logs, terminal scrollback). `trellis_model(path=...)` returns
-just that subtree with full detail including action descriptions. The workspace
-scan is cached with a TTL — it does filesystem I/O and should not run on every
-model query.
+just that subtree with full detail including action descriptions.
+
+### Workspace Scan Cache
+
+The workspace scan is cached because it does filesystem I/O. Cache design:
+- TTL: 30 seconds (configurable via `trellis.workspace-scan.cache-ttl`)
+- Invalidation: the cache is evicted on `@WorkspaceChanged` CDI events,
+  which `LifecycleManager` already fires after every lifecycle operation
+  (`slotCreate`, `start`, `end`, `pause`, `resume`). After eviction, the
+  next `trellis_model()` or `trellis_workspace()` call triggers a fresh scan.
+- Manual refresh: `trellis_workspace()` accepts a `refresh: true` parameter
+  to bypass the cache.
 
 ## §6 SSE Integration
 
@@ -322,12 +386,32 @@ to the frontend and notifying MCP clients of state changes.
 
 ### Navigation Push (sidecar → frontend)
 
-When `trellis_navigate` is called, the sidecar emits a `control:navigate`
-SSE event with the target path. The frontend's workbench component listens
-for this event and executes the navigation — switch panel, focus frame,
-select tab. Same rendering path as a human click, different trigger. The
-frontend then pushes its updated UI state back via `POST /api/model/ui-state`,
-closing the loop.
+When `trellis_navigate` is called, the sidecar generates a correlation ID
+and emits a `control:navigate` SSE event with `{target, correlationId,
+windowId?}`. The `windowId` field is optional — when omitted, all windows
+evaluate the target; when present, only the targeted window acts.
+
+The frontend's workbench component listens for `control:navigate` events
+and translates model paths to internal navigation:
+
+| Model path prefix | Frontend action |
+|-------------------|-----------------|
+| `dock-bar/{panel}` | `location.hash = '#{panel}?root=...'` |
+| `panels/workspace-view` | Hash to `#workspace`, then delegate to workspace-view |
+| `panels/workspace-view/frames/{id}` | `_jumpToFrame(id)` on the workspace-view component |
+| `panels/workspace-view/frames/{id}/tabs/{idx}` | `_jumpToFrame(id)` then `_jumpToTab(idx)` |
+| `panels/{other}` | `location.hash = '#{other}?root=...'` |
+
+After executing the navigation, the frontend pushes its updated UI state
+via `POST /api/model/ui-state` with the `correlationId` included. The
+sidecar matches the correlation ID to the pending `trellis_navigate` call
+and unblocks it with the post-navigation state. If no acknowledgment
+arrives within 5 seconds, the tool returns a timeout error.
+
+For multi-window scenarios: each window checks whether the target path
+resolves to content it hosts. Dock-bar navigation always targets the main
+window. Frame/tab navigation targets whichever window hosts that frame
+(determined by checking the window's local frame registry).
 
 ### State Change Notifications (sidecar → MCP clients)
 
@@ -346,6 +430,15 @@ infrastructure needed.
 
 The coordinating agent subscribes to `control:*` and `model:*` to stay
 informed without polling. Poll for full state, subscribe for deltas.
+
+### SSE Connection Recovery
+
+SSE connections can drop (network, process restart, timeout). Recovery
+strategy: on reconnect, the agent calls `trellis_model()` to get the full
+current state, then resumes SSE subscription. No event replay needed — the
+model is always the source of truth; SSE is an optimisation to avoid
+polling. The generation counter (§5) lets the agent detect whether state
+changed during the disconnect without comparing full model snapshots.
 
 ### No New Transport
 
@@ -396,7 +489,13 @@ When Trellis grows a new capability (e.g. build monitoring):
 | Model assembly | Tree structure matches service bean data. Path resolution returns correct subtrees. |
 | Action mapping | Every declared action maps to a real service method. Unknown actions return 404. |
 | Session log tee | Bytes written to FIFO appear in log file. Append survives reconnection. |
-| Session log read | `read-log` returns correct tail/offset of log file. Empty log returns empty. |
+| Session log read | `read-log` returns correct tail/offset of log file. Empty log returns empty. RandomAccessFile tail-read cost is O(bytes), not O(file). |
+| Session log cleanup | `destroySession()` deletes log file. Retention config moves to archive. |
+| Input logging | MCP `send-input` writes bracketed marker to log before sending keys. |
+| Generation counter | Mutations increment generation. Model response includes current generation. |
+| Workspace cache | Cache invalidated on WorkspaceChanged. TTL evicts stale entries. |
+| Path resolution errors | Invalid path returns error. Partial path returns deepest valid node. |
+| UI state size limit | Content exceeding 64KB rejected with 413. lastPushed timestamp present. |
 | UI state endpoint | POST stores state in memory. GET via model returns it. Overwrite replaces. |
 | Navigation SSE | `trellis_navigate` emits `control:navigate` event with correct target path. |
 | MCP tool bean | Each `@Tool` method delegates to correct service bean. Parameter validation. |
@@ -406,7 +505,9 @@ When Trellis grows a new capability (e.g. build monitoring):
 | Component | Test |
 |-----------|------|
 | UI state push | Workbench pushes state on panel switch. Debounce fires within max-wait. |
-| Navigation handler | `control:navigate` SSE event switches panel, focuses frame, selects tab. |
+| Navigation handler | `control:navigate` SSE event switches panel, focuses frame, selects tab. Correlation ID round-trip completes. |
+| Navigation timeout | No frontend acknowledgment within 5s returns timeout error. |
+| Multi-window nav | Window-targeted events only handled by correct window. |
 | Input logging | Human keystrokes via WebSocket appear in session log interleaved with output. |
 
 ### Integration Tests
@@ -414,5 +515,6 @@ When Trellis grows a new capability (e.g. build monitoring):
 | Area | Test |
 |------|------|
 | MCP round-trip | Connect MCP client → call `trellis_model` → verify response matches sidecar state |
-| Navigate round-trip | `trellis_navigate` → frontend receives SSE → pushes UI state → model reflects change |
+| Navigate round-trip | `trellis_navigate` → frontend receives SSE → pushes UI state with correlation ID → tool unblocks → model reflects change |
+| SSE recovery | Drop SSE → reconnect → `trellis_model()` returns current state → generation counter detects changes |
 | Terminal I/O | `trellis_terminal(send-input)` → text appears in tmux session → logged to session file → `trellis_terminal(read-log)` returns it |
