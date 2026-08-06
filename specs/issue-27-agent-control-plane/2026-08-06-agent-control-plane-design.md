@@ -71,7 +71,8 @@ trellis
 │          agent: {state, pid, memoryBytes, startedAt, command, lastError},
 │          sessionLog: "/path/to/log",
 │          actions: [send-input, read-log, start-agent, stop-agent,
-│                    pause-agent, resume-agent, refresh-agent, destroy]}]
+│                    graceful-shutdown-agent, pause-agent, resume-agent,
+│                    refresh-agent, destroy]}]
 └── workspace                                   [summary — full data via trellis_workspace]
     ├── root: "/path/to/workspace"
     ├── slotCount: 3
@@ -300,23 +301,37 @@ post-navigation state of the target node on success, or an error with
 **`trellis_terminal(name, operation, params?)`** — Terminal I/O. Operations:
 `read-log` (params: lines, offset), `send-input` (params: text), `create`
 (params: workingDir, repo, slot), `destroy`, `resize` (params: cols, rows).
-Delegates to `TerminalRegistry`. All tmux operations propagate exit code
+Delegates to `TerminalRegistry`. `resize` requires adding a
+`resize(name, cols, rows)` method to `TerminalRegistry` — it already holds
+`TmuxManager` and is the right abstraction for terminal operations
+(currently `TerminalResource.resize()` injects `TmuxManager` directly,
+bypassing the registry). All tmux operations propagate exit code
 failures — `TmuxManager.run()` throws on non-zero exit, and the MCP tool
 returns the error to the caller. No silent swallowing.
 
 **`trellis_agent(terminal, operation, params?)`** — Agent lifecycle.
-Operations: `start` (params: command, model, etc.), `stop`, `pause`,
-`resume`, `refresh`, `stats`, `tree`. Delegates to `AgentProcessManager`.
+Operations: `start` (params: resume, prompt — matching
+`StartAgentRequest`), `stop`, `graceful-shutdown`, `pause`, `resume`,
+`refresh`, `stats`, `tree`. Delegates to `AgentProcessManager`.
+`graceful-shutdown` sends Escape, tries `/exit`, waits up to 10s for
+clean exit, force-kills if needed, and marks `PAUSED_BY_COORDINATOR` —
+semantically distinct from `stop` which does an immediate tree-kill.
 
 **`trellis_lifecycle(operation, params?)`** — Slot and workspace lifecycle.
-Operations: `slot-pause`, `slot-resume`, `slot-end`, `slot-create`,
-`workspace-scan`. Delegates to `SlotAgentCoordinator` and
-`LifecycleManager`.
+Operations: `start` (params: workspaceRoot, branch, issue), `end`
+(params: slotId, workspaceRoot), `pause` (params: slotId, workspaceRoot),
+`resume` (params: slotId, workspaceRoot), `slot-create` (params:
+workspaceRoot, args), `slot-merge` (params: slotId, workspaceRoot),
+`epic-setup` (params: workspaceRoot, args), `epic-next` (params:
+epicPath), `workspace-scan`. `end`, `pause`, and `resume` delegate to
+`SlotAgentCoordinator` (which coordinates agent shutdown/restart around
+the lifecycle operation). All others delegate to `LifecycleManager`.
 
-**`trellis_workspace(path?)`** — Workspace-specific queries. Repos, slots,
-epics, pauses. Separate from `trellis_model` because workspace data is
-backend-only (no UI state merge) and the scanner is expensive — it does
-filesystem I/O and should not run on every model query.
+**`trellis_workspace(path?, refresh?)`** — Full workspace queries. Repos,
+slots, epics, pauses. `trellis_model(path="workspace")` returns a summary
+(root, slotCount, activeSlot); this tool returns the complete workspace
+model from `FileWatcherService` cache. Accepts `refresh: true` to force
+a fresh filesystem scan bypassing the cache.
 
 ### Why Category Tools
 
@@ -371,6 +386,23 @@ triggered the operation, so the coordinator's event accumulator sees all
 mutations — including MCP-initiated ones — for context assembly and
 auto-expiry.
 
+### Error Responses
+
+MCP tool errors use the `isError: true` response format with a text
+description. Error mapping:
+
+| Condition | MCP response |
+|-----------|-------------|
+| Terminal/agent not found | `isError: true`, `"not found: {name}"` |
+| Concurrent operation in progress | `isError: true`, `"concurrent operation: {details}"` |
+| Invalid operation or params | `isError: true`, `"invalid: {details}"` |
+| Agent already running (start conflict) | `isError: true`, `"agent already running in {terminal}"` |
+| Tmux/process failure | `isError: true`, `"operation failed: {message}"` |
+
+No structured error codes — the text description is sufficient for LLM
+consumers. The coordinating agent doesn't branch on error codes; it reads
+the error and decides what to do next.
+
 ## §5 Model Registry Architecture
 
 The model tree is assembled at query time from actual service beans and
@@ -398,7 +430,7 @@ bean's `trellis_model` method collects all providers via
 | Provider | Injects | Tree Branch |
 |----------|---------|-------------|
 | `TerminalModelProvider` | `TerminalRegistry`, `AgentProcessManager` | `terminals` |
-| `WorkspaceModelProvider` | `WorkspaceScanner` | `workspace` (summary) |
+| `WorkspaceModelProvider` | `FileWatcherService` | `workspace` (summary) |
 | `UIStateModelProvider` | UI state (in-memory) | `dock-bar`, `panels` |
 
 The Java records ARE the schema. Add a field to `TerminalInfo`, the model
@@ -520,10 +552,21 @@ window. Frame/tab navigation targets whichever window hosts that frame
 
 ### State Change Notifications (sidecar → MCP clients)
 
-The existing SSE topics (`agent:state`, `workspace:repos`, `workspace:slots`)
-already broadcast state changes. A coordinating agent subscribes to these
-via the existing `GET /api/push?topics=...` endpoint. No new event
-infrastructure needed.
+The existing SSE topics already broadcast state changes. A coordinating
+agent subscribes to these via the existing `GET /api/push?topics=...`
+endpoint. No new event infrastructure needed.
+
+| Topic | Source | Event |
+|-------|--------|-------|
+| `agent:state` | `AgentProcessManager` | Agent state transitions |
+| `agent:eviction` | `AgentMonitorScheduler` | Memory-pressure agent eviction |
+| `workspace:repos` | `FileWatcherService` | Repository changes detected |
+| `workspace:slots` | `FileWatcherService` | Slot changes detected |
+| `workspace:protocols` | `FileWatcherService` | Protocol file changes |
+| `coordinator:advice` | `CoordinatorService` | Proactive advice generated |
+| `coordinator:action` | `ActionService` | Action state transitions |
+| `coordinator:message` | `CoordinatorService` | Coordinator conversation turns |
+| `coordinator:notification` | `ActionService` | Autonomous action notifications |
 
 ### New SSE Topics
 
