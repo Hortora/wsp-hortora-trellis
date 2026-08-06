@@ -229,8 +229,8 @@ or validate `content` — it stores and serves it as-is. When a panel adds new
 state, the frontend push grows automatically. No backend change needed.
 
 Panel content includes action declarations embedded by the frontend. The
-`actions` lists shown in §1 (e.g. `[close, pin, detach, save-as-group]` on
-frames) are part of the pushed content, not computed by the sidecar. Each
+`actions` lists shown in §1 (e.g. `[pin, focus]` on frames) are part of
+the pushed content, not computed by the sidecar. Each
 panel component knows its own action palette and includes it in its push.
 The sidecar serves these action declarations as part of the opaque content
 blob — it does not interpret or validate them.
@@ -323,9 +323,11 @@ Operations: `start` (params: workspaceRoot, branch, issue), `end`
 `resume` (params: slotId, workspaceRoot), `slot-create` (params:
 workspaceRoot, args), `slot-merge` (params: slotId, workspaceRoot),
 `epic-setup` (params: workspaceRoot, args), `epic-next` (params:
-epicPath), `workspace-scan`. `end`, `pause`, and `resume` delegate to
+epicPath). `end`, `pause`, and `resume` delegate to
 `SlotAgentCoordinator` (which coordinates agent shutdown/restart around
 the lifecycle operation). All others delegate to `LifecycleManager`.
+Workspace refresh is handled by `trellis_workspace(refresh=true)`, not
+by a lifecycle operation.
 
 **`trellis_workspace(path?, refresh?)`** — Full workspace queries. Repos,
 slots, epics, pauses. `trellis_model(path="workspace")` returns a summary
@@ -485,10 +487,14 @@ declarations in the model, not as new tools.
 
 ### Path Resolution
 
-Model paths like `terminals/engine` or `panels/workspace-view/frames/0` are
-resolved by walking the assembled tree. Path segments map to collection names
-and identity keys (terminal name, frame id, panel name). No separate routing
-table — the tree structure IS the routing.
+Model paths like `terminals/engine` or `panels/workspace-view` are resolved
+by walking the assembled tree. Path segments map to collection names and
+identity keys (terminal name, panel name). Backend subtrees resolve to
+arbitrary depth. Frontend panel content is opaque — path resolution
+terminates at the panel level (e.g. `panels/dashboard`), returning the
+full content blob. Deep panel paths (e.g. `frames/0/tabs/1`) are for
+navigation commands (§6), not model queries. No separate routing table —
+the tree structure IS the routing.
 
 **Error contract:**
 - **Invalid path** (no matching node at any depth): error response with
