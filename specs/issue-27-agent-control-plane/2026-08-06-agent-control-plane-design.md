@@ -102,11 +102,16 @@ Each node has:
 - **Identity** — a path in the tree (e.g. `terminals/engine`,
   `panels/workspace-view/frames/0/tabs/1`)
 - **State** — current values, typed per node kind
-- **Actions** — what can be done here, with parameter descriptions
+- **Actions** — what can be done here, with parameter descriptions.
+  Actions carry a `source` field: `"backend"` actions are MCP-executable
+  via category tools; `"frontend"` actions are informational, describing
+  UI capabilities that the agent cannot invoke via MCP (see §5 Action
+  Declarations).
 - **Children** — nested nodes
 
 The model is read-only data + action declarations. It never contains
-behaviour — it is a snapshot of "what exists and what you can do with it."
+behaviour — it is a snapshot of what exists, what you can do via MCP
+tools, and what the frontend UI can do independently.
 
 ### Composite Ownership
 
@@ -230,10 +235,13 @@ state, the frontend push grows automatically. No backend change needed.
 
 Panel content includes action declarations embedded by the frontend. The
 `actions` lists shown in §1 (e.g. `[pin, focus]` on frames) are part of
-the pushed content, not computed by the sidecar. Each
-panel component knows its own action palette and includes it in its push.
-The sidecar serves these action declarations as part of the opaque content
-blob — it does not interpret or validate them.
+the pushed content, not computed by the sidecar. Each panel component
+knows its own action palette and includes it in its push with
+`"source": "frontend"` on each action descriptor. The sidecar serves
+these action declarations as part of the opaque content blob — it does
+not interpret or validate them. MCP consumers use the `source` field to
+distinguish these informational actions from MCP-executable backend
+actions (see §5 Action Declarations).
 
 The sidecar enforces a 64KB size limit on serialised `content` per panel.
 Pushes exceeding this are rejected with HTTP 413. The `lastPushed` timestamp
@@ -291,12 +299,16 @@ that terminal's full state including available actions with parameter
 descriptions. Excludes heavy content (session logs) from responses.
 
 **`trellis_navigate(target)`** — Activate a UI element (panel, frame, tab).
-`target` is a model path. Pushes a `control:navigate` SSE event to the
-frontend with a correlation ID. The tool blocks until the frontend
-acknowledges the navigation by pushing updated UI state tagged with the
-same correlation ID, or until a 5-second timeout expires. Returns the
-post-navigation state of the target node on success, or an error with
-`status: "timeout"` if the frontend does not acknowledge in time.
+`target` is a model path. Before emitting the SSE event, the tool checks
+whether any UI state has been pushed within the staleness threshold (30s).
+If no recent UI state exists, the tool returns immediately with an error
+`status: "no_frontend"` — no blocking, no timeout. When a frontend is
+connected, the tool pushes a `control:navigate` SSE event with a
+correlation ID. It blocks until the frontend acknowledges the navigation
+by pushing updated UI state tagged with the same correlation ID, or until
+a 5-second timeout expires. Returns the post-navigation state of the
+target node on success, or an error with `status: "timeout"` if the
+frontend does not acknowledge in time.
 
 **`trellis_terminal(name, operation, params?)`** — Terminal I/O. Operations:
 `read-log` (params: lines, offset), `send-input` (params: text), `create`
@@ -400,6 +412,8 @@ description. Error mapping:
 | Invalid operation or params | `isError: true`, `"invalid: {details}"` |
 | Agent already running (start conflict) | `isError: true`, `"agent already running in {terminal}"` |
 | Tmux/process failure | `isError: true`, `"operation failed: {message}"` |
+| No frontend connected (navigate) | `isError: true`, `"no frontend connected"` |
+| Navigation timeout | `isError: true`, `"navigation timeout: {target}"` |
 
 No structured error codes — the text description is sufficient for LLM
 consumers. The coordinating agent doesn't branch on error codes; it reads
@@ -433,7 +447,7 @@ bean's `trellis_model` method collects all providers via
 |----------|---------|-------------|
 | `TerminalModelProvider` | `TerminalRegistry`, `AgentProcessManager` | `terminals` |
 | `WorkspaceModelProvider` | `FileWatcherService` | `workspace` (summary) |
-| `UIStateModelProvider` | UI state (in-memory) | `dock-bar`, `panels` |
+| `UIStateModelProvider` | UI state (in-memory) | `dock-bar`, `panels` (computes `stale: true` when `lastPushed` exceeds 30s) |
 
 The Java records ARE the schema. Add a field to `TerminalInfo`, the model
 grows. Add a new record type, wire it into the relevant provider, the
@@ -449,13 +463,18 @@ Every model response includes a `generation` field — a monotonically
 increasing `AtomicLong` incremented on any state mutation across the
 service beans (`TerminalRegistry` create/destroy, `AgentProcessManager`
 state transitions, `WorkspaceChanged` CDI events, UI state pushes). The
-model assembly captures the current generation **after** all providers
-have been read and includes it in the response. This ensures that any
-mutation occurring during assembly is reflected in the reported
-generation — the agent never sees an unchanged generation when the
-underlying data has shifted. The contract: if the generation is the same
-as a previous query, no mutations occurred between the two reads and the
-data is identical.
+model assembly captures the current generation **before** any providers
+are read and includes it in the response. This makes the generation a
+lower bound on freshness — the assembled data is at least as recent as
+the reported generation. If a mutation occurs during assembly, the next
+query will report a higher generation, prompting the agent to use the
+fresh response.
+
+The contract: if the generation is the same as a previous query, no
+mutations occurred between the two assembly starts and the data is
+identical. If the generation increased, the agent should treat the newer
+response as authoritative regardless of whether the increase reflects a
+mutation during assembly or between queries.
 
 ### Frontend Assembly
 
@@ -467,9 +486,20 @@ nests it.
 ### Action Declarations
 
 Each node type carries an `actions` list describing what can be done.
-Backend actions are declared by the owning `ModelProvider` — each provider
-returns action descriptors for its node types. Frontend panel actions are
-embedded in the pushed UI state by the frontend itself (see §3).
+Two kinds of actions exist, distinguishable by their source:
+
+- **Backend actions** — declared by the owning `ModelProvider`. Each
+  provider returns action descriptors for its node types. These are
+  MCP-executable: the agent calls the corresponding category tool
+  (`trellis_terminal`, `trellis_agent`, `trellis_lifecycle`). Backend
+  action descriptors include `"source": "backend"`.
+- **Frontend actions** — embedded in the pushed UI state by the frontend
+  itself (see §3). These are part of the opaque panel content and are
+  NOT MCP-executable. They describe what the frontend UI can do with
+  that element. Frontend action descriptors include `"source": "frontend"`
+  (set by the frontend when pushing content). An MCP consumer seeing a
+  frontend action knows it cannot invoke it via tool calls — it is
+  informational, describing UI capabilities.
 
 Backend action declarations are a static mapping per node type within
 each provider. `TerminalModelProvider` declares `[send-input, read-log,
@@ -552,7 +582,10 @@ After executing the navigation, the frontend pushes its updated UI state
 via `POST /api/model/ui-state` with the `correlationId` included. The
 sidecar matches the correlation ID to the pending `trellis_navigate` call
 and unblocks it with the post-navigation state. If no acknowledgment
-arrives within 5 seconds, the tool returns a timeout error.
+arrives within 5 seconds, the pending correlation entry is removed and
+the tool returns a timeout error. Late acknowledgments arriving after
+timeout are ignored — the correlation ID no longer exists in the pending
+map.
 
 For multi-window scenarios: each window checks whether the target path
 resolves to content it hosts. Dock-bar navigation always targets the main
@@ -595,7 +628,6 @@ is a command. All other topics are notifications.
 | Topic | Convention | Event | When |
 |-------|-----------|-------|------|
 | `control:navigate` | command | `{target, correlationId, windowId?}` | Navigation command to frontend |
-| `control:action-completed` | command | `{target, action, result}` | Action completed, frontend should update |
 | `ui:state` | notification | `{activePanel, panels}` | Frontend pushed new UI state |
 
 The coordinating agent subscribes to `control:*` and `ui:*` to stay
