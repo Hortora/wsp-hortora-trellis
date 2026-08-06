@@ -447,10 +447,13 @@ Every model response includes a `generation` field — a monotonically
 increasing `AtomicLong` incremented on any state mutation across the
 service beans (`TerminalRegistry` create/destroy, `AgentProcessManager`
 state transitions, `WorkspaceChanged` CDI events, UI state pushes). The
-model assembly captures the current generation before reading and
-includes it in the response. The agent can compare generations across
-calls to detect intervening mutations — if the generation hasn't changed,
-the state is identical to the last query.
+model assembly captures the current generation **after** all providers
+have been read and includes it in the response. This ensures that any
+mutation occurring during assembly is reflected in the reported
+generation — the agent never sees an unchanged generation when the
+underlying data has shifted. The contract: if the generation is the same
+as a previous query, no mutations occurred between the two reads and the
+data is identical.
 
 ### Frontend Assembly
 
