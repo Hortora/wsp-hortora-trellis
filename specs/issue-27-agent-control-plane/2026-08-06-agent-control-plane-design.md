@@ -251,7 +251,12 @@ last 30 seconds, the model response flags it as `stale: true`.
 ### Push Trigger
 
 Debounced — same cadence as layout persistence (1s debounce, 5s max-wait).
-Panel switches push immediately (no debounce).
+Panel switches push immediately (no debounce). Heartbeat: every 15 seconds,
+the frontend pushes its current UI state regardless of changes, refreshing
+`lastPushed`. This ensures `trellis_navigate` can distinguish an idle
+frontend (connected, no recent interaction) from an absent one (no frontend
+process running). The 15-second interval is half the staleness threshold,
+providing sufficient margin for delayed heartbeats.
 
 ### Multi-Window
 
