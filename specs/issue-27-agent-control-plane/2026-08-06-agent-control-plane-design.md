@@ -41,22 +41,23 @@ actual service beans and the pushed frontend UI state.
 
 ```
 trellis
-├── dock-bar
+├── dock-bar                                    [frontend · ephemeral · per-window]
 │   ├── dashboard    {active: true}
 │   ├── workspace    {active: false}
 │   ├── artifacts    {active: false}
 │   ├── protocols    {active: false}
 │   ├── garden       {active: false}
 │   └── memory       {active: false}
-├── panels
-│   ├── dashboard
+├── panels                                      [frontend · ephemeral · per-window]
+│   ├── dashboard                               [content shape defined by frontend push]
 │   │   ├── repo-cards: [{name, branch, remoteUrl, actions: [...]}]
 │   │   ├── slot-cards: [{number, issue, status, repos, actions: [...]}]
 │   │   └── epic-cards: [{...}]
 │   ├── workspace-view
-│   │   └── frames: [{id, name, order, position, size, pinned, zIndex,
-│   │                  tabs: [{terminalName, type, active}],
-│   │                  actions: [close, pin, detach, save-as-group]}]
+│   │   └── frames: [{id, groupId?, order, position, size, pinned, zIndex,
+│   │                  activeTabIndex,
+│   │                  tabs: [{terminalName, type: 'repo'|'slot'}],
+│   │                  actions: [pin, focus]}]
 │   ├── artifacts
 │   │   └── files: [{path, type, actions: [open]}]
 │   ├── protocols
@@ -65,19 +66,34 @@ trellis
 │   │   └── results: [{id, title, domain, actions: [view]}]
 │   └── memory
 │       └── entries: [{name, type, actions: [view]}]
-├── terminals
+├── terminals                                   [backend · authoritative]
 │   └── [{name, workingDir, slot, repo, issue,
 │          agent: {state, pid, memoryBytes, startedAt, command, lastError},
 │          sessionLog: "/path/to/log",
 │          actions: [send-input, read-log, start-agent, stop-agent,
 │                    pause-agent, resume-agent, refresh-agent, destroy]}]
-└── workspace
+└── workspace                                   [summary — full data via trellis_workspace]
     ├── root: "/path/to/workspace"
-    ├── repos: [{name, path, branch, remoteUrl}]
-    ├── slots: [{number, path, issue, status, isEpic, repos}]
-    ├── pauses: [{branch, issue, timestamp}]
-    └── epics: [{...}]
+    ├── slotCount: 3
+    └── activeSlot: "slot-1"
 ```
+
+The tree annotates each subtree's state characteristics:
+
+- **backend · authoritative** — durable server-side state, always consistent,
+  trustworthy for decision-making.
+- **frontend · ephemeral · per-window** — pushed from the Electron frontend,
+  absent when no frontend is connected, may differ across windows. See §3 for
+  multi-window details.
+- **summary** — lightweight metadata included in the model tree for
+  discoverability. Full data requires the dedicated `trellis_workspace` tool.
+
+Panel content subtrees (e.g. `repo-cards`, `frames`) document the shape of
+what the frontend pushes. The sidecar does not parse or validate this content
+— it stores and serves it as opaque JSON. Path resolution via
+`trellis_model(path=...)` terminates at the panel level (e.g.
+`panels/dashboard`), returning the full content blob. The agent navigates
+within panel content client-side.
 
 ### Node Properties
 
@@ -116,10 +132,20 @@ what happened in any terminal — full history, not just what's visible.
 
 ### Write Path
 
-`TerminalWebSocket` already reads from the FIFO and forwards to the WebSocket
-client. Add a tee: every byte read from the FIFO also appends to
-`{sidecar-data-dir}/sessions/{terminalName}.log`. Append-only. The file grows
-for the lifetime of the tmux session.
+A `SessionLogger` service bean, keyed by terminal name, owns session log
+writes. `TerminalRegistry` creates the logger when the terminal is created
+and cleans it up on `destroySession()`. The `FifoRelay` (spawned by
+`TerminalWebSocket.onOpen()`) calls `sessionLogger.append(bytes)` as it
+relays FIFO data — the relay already has the byte stream, the logger just
+tees it to disk.
+
+The log file is `{sidecar-data-dir}/sessions/{terminalName}.log`.
+Append-only. The file grows for the lifetime of the tmux session.
+
+This separation means the session log is a terminal concern, not a WebSocket
+concern. The logger persists across WebSocket reconnections — the terminal
+outlives any single connection. The MCP `trellis_terminal(read-log)` tool
+injects `SessionLogger` directly rather than reading raw files.
 
 ### Encoding
 
@@ -201,6 +227,13 @@ its file list. The dashboard pushes its card states. The sidecar does not parse
 or validate `content` — it stores and serves it as-is. When a panel adds new
 state, the frontend push grows automatically. No backend change needed.
 
+Panel content includes action declarations embedded by the frontend. The
+`actions` lists shown in §1 (e.g. `[close, pin, detach, save-as-group]` on
+frames) are part of the pushed content, not computed by the sidecar. Each
+panel component knows its own action palette and includes it in its push.
+The sidecar serves these action declarations as part of the opaque content
+blob — it does not interpret or validate them.
+
 The sidecar enforces a 64KB size limit on serialised `content` per panel.
 Pushes exceeding this are rejected with HTTP 413. The `lastPushed` timestamp
 lets MCP consumers detect stale UI state — if a panel hasn't pushed in the
@@ -213,8 +246,11 @@ Panel switches push immediately (no debounce).
 
 ### Multi-Window
 
-Each `BrowserWindow` pushes its own UI state, keyed by window ID. The model
-tree includes all windows.
+Trellis currently runs a single window. The `ShellLayout` persistence format
+supports a `windows` array for future multi-window support, but the model
+tree and UI state push assume a single window. When multi-window is added,
+each window will push its own UI state keyed by window ID, and the model
+tree will nest under a `windows` collection.
 
 ### Data Flow
 
@@ -223,10 +259,17 @@ the frontend.
 
 ## §4 MCP Tools
 
-Six `@Tool` methods on a single CDI bean. The bean injects existing service
-beans (`TerminalRegistry`, `AgentProcessManager`, `WorkspaceScanner`,
-`SlotAgentCoordinator`). Return types are the existing Java records —
+Six `@Tool` methods on a thin CDI bean. The bean delegates model assembly
+to domain-specific `ModelProvider` implementations (see §5) and operations
+to existing service beans. Return types are the existing Java records —
 serialised directly, no adapter layer.
+
+The tool bean injects `Instance<ModelProvider>` for tree assembly and the
+individual service beans for operations (`TerminalRegistry`,
+`AgentProcessManager`, `SlotAgentCoordinator`, `LifecycleManager`,
+`WorkspaceScanner`). Each operation tool method is a thin dispatcher — it
+validates parameters and delegates to the appropriate service bean. The
+model assembly logic lives in the providers, not the tool bean.
 
 The tool list is the capability discovery layer — "raggable MCP." At
 connection time the LLM sees 6 tool names with brief descriptions (cheap
@@ -292,26 +335,79 @@ self-describing (the LLM knows what Trellis can do from the tool list),
 and operations within a category are parameters (new operations don't add
 new tools).
 
+### Relationship to Coordinator Action Framework
+
+Trellis has an existing programmatic execution path: the L2 coordinator
+(issue #17) proposes actions via `ActionService`, which routes through
+`ActionExecutor` implementations (`LifecycleActionExecutor`,
+`AgentActionExecutor`) to the same service beans the MCP tools call. That
+path provides governance: propose → approve → risk-gate → execute, with
+full audit persistence in `coordinator_actions`.
+
+The MCP tools are a **direct operational API**, equivalent to the REST
+resources (`TerminalResource`, `LifecycleResource`, `ScannerResource`).
+They call service beans directly, without the propose/approve/audit
+pipeline. This is intentional:
+
+- **REST resources** are the human-facing operational API. A human clicking
+  "End Slot" in the UI calls `LifecycleResource` directly — no proposal,
+  no approval, immediate execution.
+- **MCP tools** are the agent-facing operational API. A coordinating agent
+  calling `trellis_lifecycle(slot-end)` is the agent equivalent of the
+  human click — direct execution.
+- **Coordinator actions** are a governance layer. The LLM coordinator
+  observes state and proposes actions for human approval. That flow uses
+  `ActionService` for its propose/approve/execute lifecycle.
+
+An MCP client that wants governed execution can use the coordinator's
+REST API (`POST /api/coordinator/actions/{id}/approve`) — the governance
+path is available, not bypassed. The MCP tools deliberately do not
+duplicate it.
+
+The three paths share the same service-layer terminal: `LifecycleManager`,
+`AgentProcessManager`, `TerminalRegistry`. These service beans emit CDI
+events (`WorkspaceChanged`, agent state changes) regardless of which path
+triggered the operation, so the coordinator's event accumulator sees all
+mutations — including MCP-initiated ones — for context assembly and
+auto-expiry.
+
 ## §5 Model Registry Architecture
 
 The model tree is assembled at query time from actual service beans and
 pushed UI state. No separate model definition. No code generation.
 
+### ModelProvider Interface
+
+Tree assembly is factored into domain-specific providers:
+
+```java
+interface ModelProvider {
+    String domain();
+    Object summary();
+    Object resolve(String subpath);
+    List<ActionDescriptor> actionsFor(String nodeType);
+}
+```
+
+Each provider owns its subtree assembly and action declarations. The tool
+bean's `trellis_model` method collects all providers via
+`Instance<ModelProvider>` and dispatches path resolution by domain prefix.
+
 ### Backend Assembly
 
-The MCP tool bean's `trellis_model` method builds the tree by calling
-existing service methods:
-
-| Source | Method | Tree Branch |
-|--------|--------|-------------|
-| `TerminalRegistry` | `list()` | `terminals` |
-| `AgentProcessManager` | `getAllSnapshots()` | merged into terminal nodes |
-| `WorkspaceScanner` | `scan()` | `workspace` |
-| UI state (in-memory) | — | `dock-bar`, `panels` |
+| Provider | Injects | Tree Branch |
+|----------|---------|-------------|
+| `TerminalModelProvider` | `TerminalRegistry`, `AgentProcessManager` | `terminals` |
+| `WorkspaceModelProvider` | `WorkspaceScanner` | `workspace` (summary) |
+| `UIStateModelProvider` | UI state (in-memory) | `dock-bar`, `panels` |
 
 The Java records ARE the schema. Add a field to `TerminalInfo`, the model
-grows. Add a new record type, wire it into the assembly method, the model
-grows. One place to change.
+grows. Add a new record type, wire it into the relevant provider, the
+model grows.
+
+Adding a new domain (e.g. build monitoring) requires a new
+`ModelProvider` implementation. The tool bean and existing providers are
+unchanged.
 
 ### Generation Counter
 
@@ -333,15 +429,24 @@ nests it.
 
 ### Action Declarations
 
-Each node type carries an `actions` list describing what can be done. These
-are computed from the service bean's public methods. A terminal node declares
-`[send-input, read-log, start-agent, stop-agent, ...]` because those methods
-exist on `TerminalRegistry` and `AgentProcessManager`.
+Each node type carries an `actions` list describing what can be done.
+Backend actions are declared by the owning `ModelProvider` — each provider
+returns action descriptors for its node types. Frontend panel actions are
+embedded in the pushed UI state by the frontend itself (see §3).
 
-The action list is a static mapping per node type in the tool bean — a
-`Map<NodeType, List<ActionDescriptor>>`. When a new method is added to a
-service bean and needs to be exposed, it is added to this mapping. One place,
-explicit, no annotation magic.
+Backend action declarations are a static mapping per node type within
+each provider. `TerminalModelProvider` declares `[send-input, read-log,
+start-agent, stop-agent, ...]` because those methods exist on
+`TerminalRegistry` and `AgentProcessManager`. Explicit, no annotation
+magic.
+
+**Maintenance surface for a new capability:** Adding a new service method
+and exposing it requires updating (1) the service bean, (2) the action
+mapping in the owning `ModelProvider`, and (3) the REST resource (for
+REST clients). If the coordinator should know about it, the
+`ActionExecutor` and `CoordinatorPrompts` also need updating. The MCP
+tool surface (6 tools) does not change — new operations appear as action
+declarations in the model, not as new tools.
 
 ### Path Resolution
 
@@ -422,13 +527,26 @@ infrastructure needed.
 
 ### New SSE Topics
 
-| Topic | Event | When |
-|-------|-------|------|
-| `control:navigate` | `{target, result}` | Navigation command executed |
-| `control:action` | `{target, action, result}` | Action completed |
-| `model:ui-state` | `{activePanel, panels}` | Frontend pushed new UI state |
+Two topic conventions coexist on the SSE transport:
 
-The coordinating agent subscribes to `control:*` and `model:*` to stay
+- **Notification topics** (`entity:event`) — existing convention. The
+  server broadcasts that something happened. Clients react at their
+  discretion. Examples: `agent:state`, `workspace:repos`,
+  `coordinator:action`.
+- **Command topics** (`control:verb`) — new convention. The sidecar
+  sends a directive that the frontend must execute. The frontend goes
+  from observer to actor for these topics.
+
+The `control:` prefix is the formalization — any topic under `control:*`
+is a command. All other topics are notifications.
+
+| Topic | Convention | Event | When |
+|-------|-----------|-------|------|
+| `control:navigate` | command | `{target, correlationId, windowId?}` | Navigation command to frontend |
+| `control:action-completed` | command | `{target, action, result}` | Action completed, frontend should update |
+| `ui:state` | notification | `{activePanel, panels}` | Frontend pushed new UI state |
+
+The coordinating agent subscribes to `control:*` and `ui:*` to stay
 informed without polling. Poll for full state, subscribe for deltas.
 
 ### SSE Connection Recovery
@@ -453,7 +571,7 @@ The control plane adds new event types, not new infrastructure.
 - `quarkus-mcp-server` dependency added to sidecar
 - MCP tool bean with 6 `@Tool` methods (§4)
 - Model assembly from existing service beans (§5)
-- Session log tee in `TerminalWebSocket` (§2)
+- `SessionLogger` service bean for session log writes (§2)
 - `POST /api/model/ui-state` endpoint (§3)
 - Frontend UI state push from workbench component (§3)
 - `control:navigate` SSE event + frontend handler (§6)
@@ -476,9 +594,10 @@ The control plane adds new event types, not new infrastructure.
 
 When Trellis grows a new capability (e.g. build monitoring):
 1. Add the service bean with its records (`BuildInfo`, `BuildResult`)
-2. Wire it into the model assembly in the tool bean
-3. Add action entries to the action mapping
-4. The 6 MCP tools do not change — the model grows, the tools stay stable
+2. Add a `ModelProvider` implementation for the new domain
+3. Add action entries to the new provider's action mapping
+4. The 6 MCP tools and existing providers do not change — the model
+   grows, the tools stay stable
 
 ## §8 Testing Strategy
 
@@ -488,7 +607,7 @@ When Trellis grows a new capability (e.g. build monitoring):
 |-----------|------|
 | Model assembly | Tree structure matches service bean data. Path resolution returns correct subtrees. |
 | Action mapping | Every declared action maps to a real service method. Unknown actions return 404. |
-| Session log tee | Bytes written to FIFO appear in log file. Append survives reconnection. |
+| SessionLogger | Bytes written to FIFO appear in log file. Append survives reconnection. Logger persists across WebSocket reconnects. |
 | Session log read | `read-log` returns correct tail/offset of log file. Empty log returns empty. RandomAccessFile tail-read cost is O(bytes), not O(file). |
 | Session log cleanup | `destroySession()` deletes log file. Retention config moves to archive. |
 | Input logging | MCP `send-input` writes bracketed marker to log before sending keys. |
