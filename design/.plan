@@ -1,0 +1,13 @@
+# Work Plan — trellis
+
+## Queue
+- [ ] #42 — Worklog DB reader — expose soredium work state through the model tree ← active
+- [ ] #44 — Worklog bridge — JDBC reader + WorklogModelProvider for lifecycle events
+- [ ] #31 — Workspace panel UI — frame creation, repo/slot picker, add-tab
+- [ ] #25 — Playwright visual tests for terminal rendering
+- [ ] #45 — Per-frame and per-workspace terminal font size selection
+- [ ] #49 — Workbench layout: pluggable content area with optional dock bars
+
+## Session State
+Current: #42 — Worklog DB reader — expose soredium work state through the model tree
+Started: 2026-08-11
