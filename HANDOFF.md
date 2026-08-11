@@ -2,19 +2,18 @@
 
 ## Last Session
 
-Closed branch `issue-43-frame-tab-management`. Deleted the legacy workspace-view (2,400 lines), migrated e2e Playwright tests from old internal maps (`_framePositions`, `_frameTabs`, `_frameActiveTab`, `_frameOrders`) to `_engine.frames` API. Fixed broken build — `workspace-view.ts` imported frame engine functions from `@casehubio/pages-runtime` package root, but they aren't re-exported from the index yet; switched to subpath imports (`dist/dockview-backend.js`, `dist/floating-frame-engine.js`, `dist/frame-boundaries.js`). Rewrote the tab-extraction e2e test to use `handleCommand` instead of mouse DnD since tab drag-out plumbing is now pages-runtime's concern. All tests green (81 unit + 4 e2e). Squashed 38 commits → 1, landed as `a41b83f` on main. Closes #43.
+Closed branch `issue-42-worklog-db-reader`. Built a three-layer JDBC bridge from trellis to soredium's `worklog.db`: `WorklogService` (single query layer for all 8 worklog tables + `.plan` parser), `WorklogResource` (REST endpoints at `/api/worklog/`), and `WorklogModelProvider` (ModelProvider SPI, domain `worklog`). Consolidated `BacklogResource` to delegate to `WorklogService` instead of querying directly — moved `WorklogDataSourceProducer` and `BacklogEntry` from `backlog` to `worklog` package. File-mtime freshness detection for `GenerationCounter`, schema version check on init, 5s summary cache. Fixed the `wksp` symlink (was relative, broke in slots). 43 new tests (17 unit for service, 9 for provider, 7 REST integration, 4 records, 6 BacklogResource regression). Squashed 7 commits → 1, landed as `ecf1523` on main. Closes #42.
 
 ## Immediate Next Step
 
-No active branch. Check `what-next` for prioritised issues, or pick from the backlog.
+No active branch. Run `/work` to pick up the next issue from the plan queue (#44 — Worklog bridge: JDBC reader + WorklogModelProvider for lifecycle events).
 
 ## Cross-Module
 
-**Blocked by** (pages-runtime needs to ship before trellis can remove subpath import workaround):
-- `pages-runtime` — re-export frame engine functions from package index (gates casehubio/casehub-pages#303) · XS · Low
+No cross-module blockers. `pages-runtime` re-export gap (casehubio/casehub-pages#303) is still open but does not affect worklog work.
 
 ## References
 
-- Issue #43: `Hortora/trellis#43` — closed, landed as `a41b83f`
-- Issue #50: `Hortora/trellis#50` — pages gaps (pluggable chrome, arrangement)
-- Pages #303: `casehubio/casehub-pages#303` — engine auto-wiring + index re-exports
+- Issue #42: `Hortora/trellis#42` — closed, landed as `ecf1523`
+- Design spec: `docs/specs/issue-42-worklog-db-reader/2026-08-11-worklog-db-reader-design.md`
+- Garden: GE-20260811-6c228e (PRAGMA data_version per-connection), GE-20260811-3533be (SQLite WAL BUSY)
