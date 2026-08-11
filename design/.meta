@@ -1,0 +1,10 @@
+branch: issue-42-worklog-db-reader
+state: scaffolded
+project-sha: 887445b4fa9bfa911cfd768791fd90ca7ba76083
+date: 2026-08-11
+issue: 42
+issue-repo: Hortora/trellis
+covers: 42
+flyway-next-v: none
+design-repo: workspace
+design-section-hashes: 
