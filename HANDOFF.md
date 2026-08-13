@@ -2,18 +2,18 @@
 
 ## Last Session
 
-Closed branch `issue-42-worklog-db-reader`. Built a three-layer JDBC bridge from trellis to soredium's `worklog.db`: `WorklogService` (single query layer for all 8 worklog tables + `.plan` parser), `WorklogResource` (REST endpoints at `/api/worklog/`), and `WorklogModelProvider` (ModelProvider SPI, domain `worklog`). Consolidated `BacklogResource` to delegate to `WorklogService` instead of querying directly — moved `WorklogDataSourceProducer` and `BacklogEntry` from `backlog` to `worklog` package. File-mtime freshness detection for `GenerationCounter`, schema version check on init, 5s summary cache. Fixed the `wksp` symlink (was relative, broke in slots). 43 new tests (17 unit for service, 9 for provider, 7 REST integration, 4 records, 6 BacklogResource regression). Squashed 7 commits → 1, landed as `ecf1523` on main. Closes #42.
+Batched three small issues on `issue-45-terminal-font-size-and-fixes`: per-frame terminal font size cycling (#45 — `FONT_SIZES` presets, `_frameFontSizes` map, cycle button in frame titlebar, layout persistence), repo-detail 409 fix (#30 — one-line guard matching workspace-view's `_ensureTerminalExists`), and provenance write-path contract tests (#21 — 10 tests validating `ProvenanceRecord` deserialization, GE-ID formats, enrichment edge cases). Landed as `2e55fbf` on main. Then set up branch `issue-49-pluggable-workbench-layout` for #49 — scaffold only, no code changes.
 
 ## Immediate Next Step
 
-No active branch. Run `/work` to pick up the next issue from the plan queue (#44 — Worklog bridge: JDBC reader + WorklogModelProvider for lifecycle events).
+Branch `issue-49-pluggable-workbench-layout` is open for #49. Run `/work` to continue. Start with brainstorming — the workbench currently uses hardcoded single-panel switching (`_activePanel` string, `DOCK_PANELS` array in `workbench.ts`). The issue asks for pluggable layout models (single-frame, split-frame, free-layout via Dockview) and optional dock bars. Key file: `sidecar/src/main/webui/src/components/workbench.ts`.
 
 ## Cross-Module
 
-No cross-module blockers. `pages-runtime` re-export gap (casehubio/casehub-pages#303) is still open but does not affect worklog work.
+*Unchanged — `git show HEAD~1:HANDOFF.md`*
 
 ## References
 
-- Issue #42: `Hortora/trellis#42` — closed, landed as `ecf1523`
-- Design spec: `docs/specs/issue-42-worklog-db-reader/2026-08-11-worklog-db-reader-design.md`
-- Garden: GE-20260811-6c228e (PRAGMA data_version per-connection), GE-20260811-3533be (SQLite WAL BUSY)
+- Issue #49: `Hortora/trellis#49` — open, branch scaffolded
+- Workbench source: `sidecar/src/main/webui/src/components/workbench.ts`
+- Workspace-view (Dockview reference impl): `sidecar/src/main/webui/src/components/workspace-view.ts`
