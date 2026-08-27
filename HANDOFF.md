@@ -6,11 +6,11 @@ Batched three small issues on `issue-45-terminal-font-size-and-fixes`: per-frame
 
 ## Immediate Next Step
 
-Branch `issue-49-pluggable-workbench-layout` is open for #49. Run `/work` to continue. Start with brainstorming — the workbench currently uses hardcoded single-panel switching (`_activePanel` string, `DOCK_PANELS` array in `workbench.ts`). The issue asks for pluggable layout models (single-frame, split-frame, free-layout via Dockview) and optional dock bars. Key file: `sidecar/src/main/webui/src/components/workbench.ts`.
+Branch `issue-49-pluggable-workbench-layout` is open for #49. Run `/work` to continue. **Before brainstorming the design, audit what pages now provides for workbenches** — pages has had significant recent improvements to workbench capabilities. Check `@casehubio/pages-runtime` and `@casehubio/pages-component` for new workbench layout primitives, split-frame support, or dock-bar APIs that may already solve parts of #49. Then brainstorm the design using what pages offers. Key file: `sidecar/src/main/webui/src/components/workbench.ts`.
 
 ## Cross-Module
 
-*Unchanged — `git show HEAD~1:HANDOFF.md`*
+No cross-module blockers. `pages-runtime` re-export gap (casehubio/casehub-pages#303) is still open but does not block #49.
 
 ## References
 
