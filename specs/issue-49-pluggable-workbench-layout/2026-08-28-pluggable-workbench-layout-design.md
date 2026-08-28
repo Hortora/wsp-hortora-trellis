@@ -22,6 +22,8 @@ Each dock bar panel is a `DockPanelConfig`:
 
 Panel activation via `pages-dock-toggle` CustomEvent dispatch (the same mechanism `LiveSite.activateDockPanel()` uses internally). Zone rearrangement via `attachDockDrag()` with `pages-dock-rearrange` events feeding `ZoneLayoutEngine.movePanel()`.
 
+Each dock bar (left, right, bottom) is independently hideable. When all panels in a side are closed, the dock bar's cascading collapse (from `dockWorkbench()`'s component-level toggle) hides the entire side — no manual hide logic needed. A side with no `DockPanelConfig` entries omitted from the config entirely. Dock bar visibility state persisted via `LayoutState.docks`.
+
 ### 1.2 Content Area Layer
 
 A `Container` from pages-runtime's frame-sandbox, created with `createContainer()`. The container holds `Entry` objects — one per visible panel. A `ContentFactory` lazily creates Lit panel elements, replacing the current `_getOrCreatePanel()` cache.
@@ -77,7 +79,7 @@ The current 360-line component is replaced with ~100-120 lines: config declarati
 | Code | Why it stays |
 |---|---|
 | `_handleWorkspaceCommand()` | SSE → workspace-view forwarding, trellis-specific |
-| `_buildUIState()` + `_doPushUIState()` | UI state push to sidecar |
+| `_buildUIState()` + `_doPushUIState()` | UI state push to sidecar — **updated** to include `layoutMode` (container's current layout type) and `visiblePanels` (list of panel keys currently visible in the container) |
 | `_connectSSE()` / `_disconnectSSE()` | SSE transport |
 | `_startHeartbeat()` / `_stopHeartbeat()` | Heartbeat for UI state |
 
