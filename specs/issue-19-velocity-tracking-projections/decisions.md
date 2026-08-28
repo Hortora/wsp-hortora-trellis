@@ -47,3 +47,16 @@
 **Sources:** existing ModelProvider SPI, Quarkus CDI Instance injection pattern
 **Exploration:** quick
 **Status:** captured
+
+## D5: Finding record with three-tier severity
+
+**Choice:** `Finding` record with `facetKey`, `severity` (INFO/ATTENTION/ACTION_NEEDED), `subject`, `summary`, `suggestion`, `detectedAt`, `meta` (Map). Severity tiers drive LLM behaviour: INFO = mention if asked; ATTENTION = surface proactively in what-next/work; ACTION_NEEDED = lead with this.
+**Alternatives:**
+- Untyped JSON per facet — flexible but no common handling in model provider or UI
+- Two-tier severity (normal/urgent) — too coarse to distinguish "mention if asked" from "surface proactively"
+**Rationale:** Common shape lets the aggregating ModelProvider sort/filter findings uniformly. The `meta` map gives facets extensibility without polluting the common type. Three tiers match the LLM's existing proactivity model (silent, contextual, leading).
+**Trade-offs:** `meta` as Map<String, String> loses type safety for facet-specific data. Acceptable — facets document their meta keys.
+**Depends on:** D4 (facet interface)
+**Sources:** existing trellis model tree JSON conventions
+**Exploration:** quick
+**Status:** captured
