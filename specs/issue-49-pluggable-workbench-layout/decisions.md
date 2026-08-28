@@ -23,3 +23,16 @@
 **Sources:** workbench.ts DOCK_PANELS array, PANELS record
 **Exploration:** quick
 **Status:** captured
+
+## D3: Hybrid consumption — loadSite + dockWorkbench for dock bars, direct Container API for content area
+
+**Choice:** Option C — use `dockWorkbench()` / `loadSite()` for dock bar rendering and zone management; create a `Container` explicitly for the content area with `createContainer()` and `createContainerToolbar()`
+**Alternatives:**
+- A: Full Pages DSL (`loadSite` + `dockWorkbench` + `hostPanel` centre) — simplest migration but defers content area layout modes, which is the core #49 requirement
+- B: `ZoneLayoutEngine` + custom Lit rendering — more control but duplicates `renderComponent()` and `buildTreeFromZones()` (~150 lines of unnecessary custom code)
+**Rationale:** #49 explicitly requires pluggable content area layout (single-frame, split-frame at minimum). The Container API delivers this directly — tabbed, split, free, accordion layout modes via `LayoutStrategy`, with `OrganiserToolbar` for switching. Dock bars are pure infrastructure; `dockWorkbench()` handles them without custom code. The two layers are independent.
+**Trade-offs:** Slightly more integration code than pure Option A (Container setup + ContentFactory), but delivers the actual feature. Container API is i3wm-inspired recursive tiling — powerful but more surface area to understand.
+**Depends on:** D1 (workspace as dock-bar panel — not a container entry)
+**Sources:** pages-runtime frame-sandbox/container.d.ts, frame-sandbox/types.d.ts, issue #49 acceptance criteria
+**Exploration:** deep-analysis
+**Status:** captured
