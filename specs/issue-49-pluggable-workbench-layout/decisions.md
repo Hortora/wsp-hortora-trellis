@@ -48,3 +48,14 @@
 **Sources:** pages-runtime rest-layout-store.ts, pages-component types.ts (LayoutState), trellis WorkspaceResource.java
 **Exploration:** quick
 **Status:** captured
+
+## D5: Panel-level navigation only — deep paths delegated to panels
+
+**Choice:** SSE `control:navigate` activates panels by key only. Deep navigation paths (e.g., `panels/workspace-view/frames/xyz/tabs/2`) are forwarded to the target panel for internal handling. The workbench does not parse sub-paths.
+**Alternatives:**
+- Workbench parses deep paths and calls panel-specific methods (current approach) — couples workbench to each panel's internal API, grows with every new navigable sub-path
+**Rationale:** Each panel owns its internal navigation. The workbench activates the panel, then passes the sub-path to it via a standard interface (e.g., `navigate(subPath)`). Cleaner separation, no coupling between workbench routing and panel internals.
+**Trade-offs:** Panels must implement their own sub-path handling. Currently only workspace-view needs this.
+**Sources:** workbench.ts `_handleNavigateEvent()`, workspace-view `focusFrame()`/`focusTab()`
+**Exploration:** quick
+**Status:** captured
