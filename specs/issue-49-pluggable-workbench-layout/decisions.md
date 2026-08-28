@@ -36,3 +36,15 @@
 **Sources:** pages-runtime frame-sandbox/container.d.ts, frame-sandbox/types.d.ts, issue #49 acceptance criteria
 **Exploration:** deep-analysis
 **Status:** captured
+
+## D4: Trellis adopts pages layout persistence model
+
+**Choice:** Trellis backend serves `/api/layouts/{key}` (GET/PUT/DELETE) using pages' `LayoutState` type. Frontend uses `createRestLayoutStore()` directly. Drop existing `/api/workspace/layout` and `/api/workspace/groups` endpoints.
+**Alternatives:**
+- Keep trellis endpoints, write adapter — shim code, two models for the same thing, pre-release so no backward compat needed
+- Keep trellis endpoints, extend with container state — fragments layout state across 3+ endpoints as features grow
+**Rationale:** Pages defines the canonical layout model (`LayoutState` with zones, docks, splits, containerState, frames). One state object, one key, one endpoint. Trellis consuming it directly means zero glue code and one source of truth for the persistence contract.
+**Trade-offs:** Trellis backend endpoint rename — existing `/api/workspace/layout` and `/api/workspace/groups` callers need updating. No external consumers, so no migration concern.
+**Sources:** pages-runtime rest-layout-store.ts, pages-component types.ts (LayoutState), trellis WorkspaceResource.java
+**Exploration:** quick
+**Status:** captured
