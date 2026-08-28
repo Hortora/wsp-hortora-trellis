@@ -11,3 +11,15 @@
 **Sources:** workbench.ts (current implementation), issue #49 design notes
 **Exploration:** quick
 **Status:** captured
+
+## D2: Preserve current panel structure for initial migration
+
+**Choice:** Keep all 8 dock-bar panels as-is, keep 3 hash sub-views (slot, epic, repo) as dashboard overlays. Reorganisation deferred to future incremental work.
+**Alternatives:**
+- Promote some panels to permanent content area entries (e.g., dashboard + backlog always visible) — adds scope, premature without user feedback on which combinations matter
+- Demote rarely-used panels to content-only (no dock-bar button) — saves dock-bar space but changes muscle memory
+**Rationale:** Migration should change the infrastructure, not the panel topology. Incremental reorganisation after the new layout is stable avoids coupling two changes.
+**Trade-offs:** Initial result looks identical to today — the value is in the unlocked capability, not immediate visual change.
+**Sources:** workbench.ts DOCK_PANELS array, PANELS record
+**Exploration:** quick
+**Status:** captured
