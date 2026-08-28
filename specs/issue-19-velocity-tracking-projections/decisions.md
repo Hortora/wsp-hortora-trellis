@@ -33,3 +33,17 @@
 **Sources:** casehub-engine GOAP (RoutingStrategy, GoapDecompositionStrategy), issue #48 (claudony consolidation)
 **Exploration:** quick
 **Status:** captured
+
+## D4: CDI-discovered facets with runtime enable/disable via config
+
+**Choice:** Hybrid — each facet is a CDI bean implementing `IntelligenceFacet` (auto-discovered, no manual registry). A single `WorkIntelligenceModelProvider` injects `Instance<IntelligenceFacet>`, iterates all, skips disabled ones. Each facet has `isEnabled()` reading config at call time (`trellis.intelligence.facets.<key>.enabled`). Runtime toggleable.
+**Alternatives:**
+- Each facet IS a separate ModelProvider — CDI auto-discovery but fragments the model tree into many subtrees, no central aggregation
+- Single ModelProvider with manual facet list — more control but manual wiring, no CDI discovery
+- `@IfBuildProperty` gating — build-time only, can't toggle at runtime
+**Rationale:** CDI gives zero-wiring discovery. Runtime config check gives live toggle. Single aggregating ModelProvider gives a consistent `intelligence/` subtree. Best of all three.
+**Trade-offs:** All facet classes are always on the classpath even when disabled. Negligible cost.
+**Depends on:** D2 (facet architecture)
+**Sources:** existing ModelProvider SPI, Quarkus CDI Instance injection pattern
+**Exploration:** quick
+**Status:** captured
