@@ -121,9 +121,13 @@ All panel Lit components (`trellis-org-dashboard`, `trellis-workspace-view`, etc
 
 ### 2.3 Context application
 
-The current `_applyContext()` method sets panel-specific properties (slotNumber, owner, repo, epicNumber, etc.) based on hash routing context. In the new architecture, this is handled by the `ContentFactory` — the factory receives the `Entry` and can set properties based on the entry key and current navigation state.
+The current `_applyContext()` method sets panel-specific properties (slotNumber, owner, repo, epicNumber, etc.) based on hash routing context. Two concerns:
 
-For sub-view panels (slot, epic, repo) that are dashboard overlays: hash routing still switches the dashboard's internal content. The workbench doesn't create separate panels for these — the dashboard component handles its own sub-navigation.
+1. **Initial properties** — `ContentFactory` sets `workspaceRoot` when creating the element. This is the only property every panel needs at creation time.
+
+2. **Navigation-driven properties** (slotNumber, owner, repo, epicNumber) — these are set by the dashboard component itself when it handles sub-view hash routes (`#slot/42`, `#epic/owner/repo/5`, `#repo/name`). The workbench no longer applies context to panels — each panel reads its own navigation state from the hash. The dashboard already renders slot, epic, and repo as internal sub-views; it just needs to own the hash parsing for its sub-routes instead of receiving properties from the workbench.
+
+This eliminates the `_applyContext()` coupling — the workbench doesn't need to know each panel's property API.
 
 ## 3. Backend Changes
 
