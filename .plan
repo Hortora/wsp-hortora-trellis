@@ -1,0 +1,15 @@
+# Work Plan — issue-19-velocity-tracking-projections
+
+## State
+branch: issue-19-velocity-tracking-projections
+state: scaffolded
+project-sha: 1578db7b0ee971f0949bc19d00623f3d0a3f1f18
+date: 2026-08-28
+issue-repo: Hortora/trellis
+covers: 19
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] Hortora/trellis#19 — Issue #19 ← active
