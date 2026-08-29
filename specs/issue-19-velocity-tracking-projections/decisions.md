@@ -34,29 +34,29 @@
 **Exploration:** quick
 **Status:** captured
 
-## D4: CDI-discovered facets with runtime enable/disable via config
+## D4: Facets implemented as RAS JavaSwitchGanglion subclasses
 
-**Choice:** Hybrid — each facet is a CDI bean implementing `IntelligenceFacet` (auto-discovered, no manual registry). A single `WorkIntelligenceModelProvider` injects `Instance<IntelligenceFacet>`, iterates all, skips disabled ones. Each facet has `isEnabled()` reading config at call time (`trellis.intelligence.facets.<key>.enabled`). Runtime toggleable.
+**Choice:** Each intelligence facet is a `JavaSwitchGanglion` subclass discovered via `SituationDefinitionProvider` CDI beans. RAS handles detection dispatch, correlation, and situation lifecycle. Trellis adds `casehub-ras-api` + `casehub-ras-runtime` as dependencies. No Drools. Runtime enable/disable via RAS situation config.
 **Alternatives:**
-- Each facet IS a separate ModelProvider — CDI auto-discovery but fragments the model tree into many subtrees, no central aggregation
-- Single ModelProvider with manual facet list — more control but manual wiring, no CDI discovery
+- Custom `IntelligenceFacet` interface + CDI discovery — works but reinvents what RAS already provides (detection, correlation, evidence tracking, situation lifecycle)
+- Drools-based RAS rules — too heavy for this use case, adds DRL file management
 - `@IfBuildProperty` gating — build-time only, can't toggle at runtime
-**Rationale:** CDI gives zero-wiring discovery. Runtime config check gives live toggle. Single aggregating ModelProvider gives a consistent `intelligence/` subtree. Best of all three.
-**Trade-offs:** All facet classes are always on the classpath even when disabled. Negligible cost.
+**Rationale:** RAS is casehub platform infrastructure. Trellis should consume it, not duplicate it. `JavaSwitchGanglion` is pure Java with no Drools dependency — lightweight enough for trellis. Gets correlation, evidence, and situation lifecycle for free.
+**Trade-offs:** Takes a dependency on casehub-ras. Acceptable — trellis already depends on casehub platform modules. May need to extend RAS if the worklog data input pattern (polling a DB vs receiving CloudEvents) isn't supported — extensions go back to RAS, not bespoke in trellis.
 **Depends on:** D2 (facet architecture)
-**Sources:** existing ModelProvider SPI, Quarkus CDI Instance injection pattern
-**Exploration:** quick
-**Status:** captured
+**Sources:** casehub-ras JavaSwitchGanglion, SituationDefinitionProvider, RasEngine
+**Exploration:** deep-analysis
+**Status:** revised (replaced custom IntelligenceFacet with RAS consumption)
 
-## D5: Finding record with three-tier severity
+## D5: ActiveSituation as the finding model, severity mapped from confidence
 
-**Choice:** `Finding` record with `facetKey`, `severity` (INFO/ATTENTION/ACTION_NEEDED), `subject`, `summary`, `suggestion`, `detectedAt`, `meta` (Map). Severity tiers drive LLM behaviour: INFO = mention if asked; ATTENTION = surface proactively in what-next/work; ACTION_NEEDED = lead with this.
+**Choice:** Use RAS `ActiveSituation` (correlationKey, confidence, evidence, timestamps, triggerCount) as the finding model. Trellis maps `DetectionSignal` + confidence thresholds to three LLM behaviour tiers at the ModelProvider layer: confidence < 0.4 → INFO (mention if asked), 0.4–0.7 → ATTENTION (surface proactively), > 0.7 → ACTION_NEEDED (lead with this).
 **Alternatives:**
-- Untyped JSON per facet — flexible but no common handling in model provider or UI
-- Two-tier severity (normal/urgent) — too coarse to distinguish "mention if asked" from "surface proactively"
-**Rationale:** Common shape lets the aggregating ModelProvider sort/filter findings uniformly. The `meta` map gives facets extensibility without polluting the common type. Three tiers match the LLM's existing proactivity model (silent, contextual, leading).
-**Trade-offs:** `meta` as Map<String, String> loses type safety for facet-specific data. Acceptable — facets document their meta keys.
-**Depends on:** D4 (facet interface)
-**Sources:** existing trellis model tree JSON conventions
-**Exploration:** quick
-**Status:** captured
+- Custom `Finding` record — works but duplicates RAS's situation model (confidence, evidence, timestamps all exist in ActiveSituation)
+- Direct DetectionSignal exposure to LLM — NOISE/ANTI/WEAK/DETECTED is an internal vocabulary; the LLM needs behaviour guidance, not signal classification
+**Rationale:** ActiveSituation carries richer data than the proposed Finding (correlation, trigger count, evidence map). The severity mapping is a thin presentation layer in the ModelProvider — one method, testable. Avoids a parallel type hierarchy.
+**Trade-offs:** Trellis depends on RAS's situation model. If RAS changes ActiveSituation, trellis adapts. Acceptable — trellis is a platform consumer, not independent.
+**Depends on:** D4 (RAS adoption)
+**Sources:** casehub-ras ActiveSituation, DetectionSignal, DetectionResult
+**Exploration:** deep-analysis
+**Status:** revised (replaced custom Finding with RAS ActiveSituation)
