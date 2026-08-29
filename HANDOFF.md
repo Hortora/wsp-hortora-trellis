@@ -2,18 +2,24 @@
 
 ## Last Session
 
-Batched three small issues on `issue-45-terminal-font-size-and-fixes`: per-frame terminal font size cycling (#45 — `FONT_SIZES` presets, `_frameFontSizes` map, cycle button in frame titlebar, layout persistence), repo-detail 409 fix (#30 — one-line guard matching workspace-view's `_ensureTerminalExists`), and provenance write-path contract tests (#21 — 10 tests validating `ProvenanceRecord` deserialization, GE-ID formats, enrichment edge cases). Landed as `2e55fbf` on main. Then set up branch `issue-49-pluggable-workbench-layout` for #49 — scaffold only, no code changes.
+Two issues completed, one started:
+
+**#49 — Pluggable Workbench Layout (CLOSED):** Rewrote trellis-workbench from 360-line monolithic Lit component to two-layer pages-runtime architecture: `dockWorkbench()` + `renderComponent()` for dock bars with `ZoneLayoutEngine` drag rearrangement, `Container` from frame-sandbox for pluggable content area (content/tabbed/splith/splitv modes). Backend: replaced `/api/workspace/layout` + `/api/workspace/groups` with key-based `/api/layouts/{key}` endpoint with path traversal protection. Fixed pre-existing Quarkus startup failures (StaticCoordinatorRouting return type, SmallRye config mapping validation). 11 commits squashed to 4, landed on main. Also fixed `artifact_promote.py` and `close_artifacts.py` in soredium (commit message missing issue ref + empty staged check).
+
+**#19 — Work Intelligence (IN PROGRESS, branch open):** Reframed from velocity tracking to proactive work intelligence — RAS-based detection of stalled, forgotten, unblocked, and cross-repo dependency gaps. Design spec and implementation plan written. 3 batches, 7 tasks. No implementation started — ready for Batch 1 Task 1 (add RAS dependencies + CloudEvent factory).
 
 ## Immediate Next Step
 
-Branch `issue-49-pluggable-workbench-layout` is open for #49. Run `/work` to continue. **Before brainstorming the design, audit what pages now provides for workbenches** — pages has had significant recent improvements to workbench capabilities. Check `@casehubio/pages-runtime` and `@casehubio/pages-component` for new workbench layout primitives, split-frame support, or dock-bar APIs that may already solve parts of #49. Then brainstorm the design using what pages offers. Key file: `sidecar/src/main/webui/src/components/workbench.ts`.
+`work continue` on branch `issue-19-velocity-tracking-projections`. Plan at `plans/2026-08-29-work-intelligence.md`. Start with executing-plans Batch 1 Task 1.
 
 ## Cross-Module
 
-No cross-module blockers. `pages-runtime` re-export gap (casehubio/casehub-pages#303) is still open but does not block #49.
+- `blocks-ui-core` in `.casehub-packages/` is out of date — `kpi-metric-row` imports `emitPagesEvent` and `renderSparkline` which aren't exported. Blocks `yarn build` and `quarkus:dev`. Needs portal sync.
+- Soredium fix for `artifact_promote.py` committed on `issue-306-slot-manager-decomposition` branch — may need merging to main.
 
 ## References
 
-- Issue #49: `Hortora/trellis#49` — open, branch scaffolded
-- Workbench source: `sidecar/src/main/webui/src/components/workbench.ts`
-- Workspace-view (Dockview reference impl): `sidecar/src/main/webui/src/components/workspace-view.ts`
+- Design spec: `specs/issue-19-velocity-tracking-projections/2026-08-29-work-intelligence-design.md`
+- Plan: `plans/2026-08-29-work-intelligence.md`
+- Decisions: `specs/issue-19-velocity-tracking-projections/decisions.md`
+- Garden: GE-20260828-74bbb5 (createRestLayoutStore no query params), GE-20260424-4b7aa2 revised (SRCFG00050 fix confirmed)

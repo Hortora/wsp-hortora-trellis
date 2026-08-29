@@ -1,0 +1,19 @@
+# Work Plan — issue-19-velocity-tracking-projections
+
+## State
+branch: issue-19-velocity-tracking-projections
+state: closing:stamped
+project-sha: 1578db7b0ee971f0949bc19d00623f3d0a3f1f18
+date: 2026-08-28
+issue-repo: Hortora/trellis
+covers: 19
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+evidence-era: true
+## Queue
+- [x] Hortora/trellis#19 — Issue #19
+
+## Deferred
+- [ ] CrossRepoAdapter data sourcing (M / Med) [trellis] — Needs PR cache in enrichment.db — current github_issue_cache only stores issues, not PRs. Adapter shell ready, data sourcing requires enrichment.py extension.
