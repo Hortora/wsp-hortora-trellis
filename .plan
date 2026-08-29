@@ -13,3 +13,13 @@ flyway-next-v: none
 
 ## Queue
 - [ ] Hortora/trellis#19 — Issue #19 ← active
+  - [ ] Batch 1: Foundation
+    - [ ] Task 1: RAS deps and CloudEvent factory
+    - [ ] Task 2: StalledWorkGanglion + adapter + situation provider
+    - [ ] Task 3: WorkIntelligenceModelProvider + REST endpoint
+  - [ ] Batch 2: Facets
+    - [ ] Task 4: UnblockedWorkGanglion + EnrichmentAdapter
+    - [ ] Task 5: ForgottenDeferralGanglion + DeferredItemAdapter
+    - [ ] Task 6: CrossRepoDependencyGanglion + CrossRepoAdapter
+  - [ ] Batch 3: UI
+    - [ ] Task 7: Intelligence panel + workbench registration
