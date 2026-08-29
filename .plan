@@ -13,13 +13,11 @@ flyway-next-v: none
 
 ## Queue
 - [ ] Hortora/trellis#19 — Issue #19 ← active
-  - [x] Batch 1: Foundation
-    - [x] Task 1: RAS deps and CloudEvent factory
-    - [x] Task 2: StalledWorkGanglion + adapter + situation provider
-    - [x] Task 3: WorkIntelligenceModelProvider + REST endpoint
-  - [x] Batch 2: Facets
-    - [x] Task 4: UnblockedWorkGanglion + EnrichmentAdapter
-    - [x] Task 5: ForgottenDeferralGanglion + DeferredItemAdapter
-    - [x] Task 6: CrossRepoDependencyGanglion + CrossRepoAdapter
-  - [x] Batch 3: UI
-    - [x] Task 7: Intelligence panel + workbench registration
+  - [ ] Batch 1: UI
+    - [x] Task 1: Adapter scheduling + fallback sweep
+    - [x] Task 2: Finding summary and suggestion text
+    - [ ] Task 3: CrossRepoAdapter data sourcing
+    - [x] Task 4: INFO section collapsed by default
+
+## Deferred
+- [ ] CrossRepoAdapter data sourcing (M / Med) [trellis] — Needs PR cache in enrichment.db — current github_issue_cache only stores issues, not PRs. Adapter shell ready, data sourcing requires enrichment.py extension.
