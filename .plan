@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-19-velocity-tracking-projections
-state: scaffolded
+state: active
 project-sha: 1578db7b0ee971f0949bc19d00623f3d0a3f1f18
 date: 2026-08-28
 issue-repo: Hortora/trellis
@@ -13,13 +13,13 @@ flyway-next-v: none
 
 ## Queue
 - [ ] Hortora/trellis#19 — Issue #19 ← active
-  - [ ] Batch 1: Foundation
-    - [ ] Task 1: RAS deps and CloudEvent factory
-    - [ ] Task 2: StalledWorkGanglion + adapter + situation provider
-    - [ ] Task 3: WorkIntelligenceModelProvider + REST endpoint
-  - [ ] Batch 2: Facets
-    - [ ] Task 4: UnblockedWorkGanglion + EnrichmentAdapter
-    - [ ] Task 5: ForgottenDeferralGanglion + DeferredItemAdapter
-    - [ ] Task 6: CrossRepoDependencyGanglion + CrossRepoAdapter
-  - [ ] Batch 3: UI
-    - [ ] Task 7: Intelligence panel + workbench registration
+  - [x] Batch 1: Foundation
+    - [x] Task 1: RAS deps and CloudEvent factory
+    - [x] Task 2: StalledWorkGanglion + adapter + situation provider
+    - [x] Task 3: WorkIntelligenceModelProvider + REST endpoint
+  - [x] Batch 2: Facets
+    - [x] Task 4: UnblockedWorkGanglion + EnrichmentAdapter
+    - [x] Task 5: ForgottenDeferralGanglion + DeferredItemAdapter
+    - [x] Task 6: CrossRepoDependencyGanglion + CrossRepoAdapter
+  - [x] Batch 3: UI
+    - [x] Task 7: Intelligence panel + workbench registration
