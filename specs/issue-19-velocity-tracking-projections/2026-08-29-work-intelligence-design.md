@@ -29,7 +29,7 @@ Each adapter emits CloudEvents when its data source changes. Event-driven for lo
 | Adapter | Source | CloudEvent type | Trigger |
 |---------|--------|----------------|---------|
 | `WorklogEventAdapter` | worklog.db `events` + `work_items` | `trellis.worklog.snapshot` | `GenerationCounter` mtime change |
-| `EnrichmentAdapter` | enrichment.db (GitHub issue cache) | `trellis.enrichment.issue` | `enrichment.py refresh` completion |
+| `EnrichmentAdapter` | enrichment.db (GitHub issue cache) | `trellis.enrichment.issue` | enrichment.db mtime change (triggered by `enrichment.py refresh` at work-start, or by fallback sweep) |
 | `DeferredItemAdapter` | .plan files across workspaces | `trellis.deferred.item` | .plan file mtime change |
 | `CrossRepoAdapter` | GitHub API via enrichment cache | `trellis.crossrepo.change` | Enrichment refresh (fallback: 15 min poll) |
 
