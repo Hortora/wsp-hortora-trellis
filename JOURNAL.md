@@ -1,1 +1,1 @@
-# Design Journal — issue-19-velocity-tracking-projections
+# Design Journal — issue-54-dependency-graph-blockers-dashboard

@@ -1,0 +1,15 @@
+# Work Plan — issue-54-dependency-graph-blockers-dashboard
+
+## State
+branch: issue-54-dependency-graph-blockers-dashboard
+state: scaffolded
+project-sha: 37a607d33cd3633259d0cd3b8aee01085ef1e712
+date: 2026-08-30
+issue-repo: Hortora/trellis
+covers: 54
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] Hortora/trellis#54 — Issue #54 ← active
