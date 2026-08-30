@@ -4,22 +4,34 @@
 
 Two issues completed, one started:
 
-**#49 — Pluggable Workbench Layout (CLOSED):** Rewrote trellis-workbench from 360-line monolithic Lit component to two-layer pages-runtime architecture: `dockWorkbench()` + `renderComponent()` for dock bars with `ZoneLayoutEngine` drag rearrangement, `Container` from frame-sandbox for pluggable content area (content/tabbed/splith/splitv modes). Backend: replaced `/api/workspace/layout` + `/api/workspace/groups` with key-based `/api/layouts/{key}` endpoint with path traversal protection. Fixed pre-existing Quarkus startup failures (StaticCoordinatorRouting return type, SmallRye config mapping validation). 11 commits squashed to 4, landed on main. Also fixed `artifact_promote.py` and `close_artifacts.py` in soredium (commit message missing issue ref + empty staged check).
+**#19 — Work Intelligence (CLOSED):** Built RAS-based intelligence system — four JavaSwitchGanglion facets (stalled-work, unblocked-work, forgotten-deferral, cross-repo-dependency), four data adapters, WorkIntelligenceModelProvider with severity mapping + summary/suggestion text, GET /api/intelligence endpoint, trellis-intelligence-panel Lit component. 45 tests. Landed as `012e01a` on main. Follow-up #53 filed for CrossRepoAdapter PR cache data sourcing.
 
-**#19 — Work Intelligence (IN PROGRESS, branch open):** Reframed from velocity tracking to proactive work intelligence — RAS-based detection of stalled, forgotten, unblocked, and cross-repo dependency gaps. Design spec and implementation plan written. 3 batches, 7 tasks. No implementation started — ready for Batch 1 Task 1 (add RAS dependencies + CloudEvent factory).
+**Runtime fixes during launch testing:** ganglions needed `@ApplicationScoped` for CDI discovery, `quarkus-micrometer` required by casehub-ras runtime, `@casehubio/pages-filter-bar` added to package.json resolutions (frontend builds now), sweep job CPU thrash fixed by disabling (`poll-interval=off`). Workbench shell has pre-existing `renderComponent` TypeError from stale `.casehub-packages`.
+
+**#54 — Dependency Graph + Blockers Dashboard (IN PROGRESS, branch open):** Brainstorming complete, 7 decisions captured (D1-D7). No spec or implementation yet.
 
 ## Immediate Next Step
 
-`work continue` on branch `issue-19-velocity-tracking-projections`. Plan at `plans/2026-08-29-work-intelligence.md`. Start with executing-plans Batch 1 Task 1.
+`work continue` on branch `issue-54-dependency-graph-blockers-dashboard`. Write the design spec from the 7 captured decisions, then invoke writing-plans.
+
+## Key Decisions (D1-D7)
+
+- D1: Issue body parsing for dependency extraction
+- D2: Single-repo graph scope
+- D3: Three-column status view (Blocked/Unblocked/Clear) with critical path
+- D4: Shared DependencyService feeds both blockers dashboard and intelligence
+- D5: Simple chain-length critical path
+- D6: Workspace root folder = "space" — scopes all panels
+- D7: FileWatcherService (directory-watcher) for repo discovery
 
 ## Cross-Module
 
-- `blocks-ui-core` in `.casehub-packages/` is out of date — `kpi-metric-row` imports `emitPagesEvent` and `renderSparkline` which aren't exported. Blocks `yarn build` and `quarkus:dev`. Needs portal sync.
-- Soredium fix for `artifact_promote.py` committed on `issue-306-slot-manager-decomposition` branch — may need merging to main.
+- `.casehub-packages` portal packages stale — `renderComponent` TypeError blocks workbench UI. Needs full portal sync.
+- Intelligence sweep job disabled (`poll-interval=off`). Needs throttling before re-enabling.
 
 ## References
 
-- Design spec: `specs/issue-19-velocity-tracking-projections/2026-08-29-work-intelligence-design.md`
-- Plan: `plans/2026-08-29-work-intelligence.md`
-- Decisions: `specs/issue-19-velocity-tracking-projections/decisions.md`
-- Garden: GE-20260828-74bbb5 (createRestLayoutStore no query params), GE-20260424-4b7aa2 revised (SRCFG00050 fix confirmed)
+- Decisions: `specs/issue-54-dependency-graph-blockers-dashboard/decisions.md`
+- Intelligence spec: `specs/issue-19-velocity-tracking-projections/2026-08-29-work-intelligence-design.md`
+- #53 — CrossRepoAdapter PR cache (deferred from #19)
+- #54 — Dependency graph + blockers dashboard (active)
