@@ -13,3 +13,14 @@ flyway-next-v: none
 
 ## Queue
 - [ ] Hortora/trellis#54 — Issue #54 ← active
+  - [ ] Batch 1: Data+Graph
+    - [ ] Task 1: IssueDependencyData record and query
+    - [ ] Task 2: Graph model records and body parser
+  - [ ] Batch 2: Service+CritPath
+    - [ ] Task 3: DependencyService graph construction and critical path
+  - [ ] Batch 3: REST+Intel
+    - [ ] Task 4: DependencyResource REST endpoint
+    - [ ] Task 5: Fix EnrichmentAdapter real blocker state
+  - [ ] Batch 4: Frontend
+    - [ ] Task 6: Blockers dashboard panel and registration
+    - [ ] Task 7: Update CLAUDE.md conventions
