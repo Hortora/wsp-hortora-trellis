@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-54-dependency-graph-blockers-dashboard
-state: scaffolded
+state: active
 project-sha: 37a607d33cd3633259d0cd3b8aee01085ef1e712
 date: 2026-08-30
 issue-repo: Hortora/trellis
