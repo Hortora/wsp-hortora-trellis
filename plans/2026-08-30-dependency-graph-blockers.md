@@ -164,7 +164,7 @@ Refs #54"
   - `DependencyEdge(IssueRef blocked, IssueRef blocker)` — "blocked is blocked by blocker"
   - `IssueStatus` enum: `BLOCKED, UNBLOCKED, CLEAR`
   - `DependencyNode(IssueRef ref, String title, String issueState, IssueStatus status, List<IssueRef> blockedBy, List<IssueRef> blocking)`
-  - `DependencyGraph(List<DependencyNode> nodes, List<DependencyEdge> edges, List<IssueRef> criticalPath, Map<IssueStatus, List<DependencyNode>> grouped)`
+  - `DependencyGraph(List<DependencyNode> nodes, List<DependencyEdge> edges, List<IssueRef> criticalPath, Map<IssueStatus, List<DependencyNode>> grouped, Map<IssueRef, String> issueStates)` — `issueStates` maps every known ref (including closed issues) to its state string ("OPEN", "CLOSED", "EXTERNAL")
   - `DependencyParser.parseEdges(int issueNumber, String issueRepo, String body)` returning `List<DependencyEdge>`
 
 - [ ] **Step 1: Write failing tests for the body parser**
@@ -343,7 +343,8 @@ import java.util.Map;
 public record DependencyGraph(List<DependencyNode> nodes,
                               List<DependencyEdge> edges,
                               List<IssueRef> criticalPath,
-                              Map<IssueStatus, List<DependencyNode>> grouped) {}
+                              Map<IssueStatus, List<DependencyNode>> grouped,
+                              Map<IssueRef, String> issueStates) {}
 ```
 
 - [ ] **Step 4: Implement DependencyParser**
@@ -708,7 +709,8 @@ public class DependencyService {
         List.of(), List.of(), List.of(), Map.of(
             IssueStatus.BLOCKED, List.of(),
             IssueStatus.UNBLOCKED, List.of(),
-            IssueStatus.CLEAR, List.of()));
+            IssueStatus.CLEAR, List.of()),
+        Map.of());
 
     private final WorklogService worklogService;
     private final FileWatcherService fileWatcherService;
@@ -789,7 +791,7 @@ public class DependencyService {
         var criticalPath = computeCriticalPath(nodes, stateMap);
 
         var graph = new DependencyGraph(List.copyOf(nodes), List.copyOf(allEdges),
-            criticalPath, Map.copyOf(grouped));
+            criticalPath, Map.copyOf(grouped), Map.copyOf(stateMap));
         cachedGraph = graph;
         cachedGeneration = gen;
         return graph;
@@ -962,7 +964,9 @@ class DependencyResourceTest {
             List.of(new IssueRef(42, "R"), new IssueRef(55, "R")),
             Map.of(IssueStatus.BLOCKED, List.of(blocked),
                    IssueStatus.UNBLOCKED, List.of(),
-                   IssueStatus.CLEAR, List.of(clear)));
+                   IssueStatus.CLEAR, List.of(clear)),
+            Map.of(new IssueRef(42, "R"), "OPEN", new IssueRef(55, "R"), "OPEN",
+                   new IssueRef(53, "R"), "OPEN"));
         when(service.buildGraph(Path.of("/root"))).thenReturn(graph);
 
         var resource = new DependencyResource(service);
@@ -1044,13 +1048,18 @@ public class DependencyResource {
         map.put("title", node.title());
         map.put("issueState", node.issueState());
         map.put("status", node.status().name());
-        map.put("blockedBy", node.blockedBy().stream().map(this::refToMap).toList());
+        map.put("blockedBy", node.blockedBy().stream().map(b -> refWithState(b, graph.issueStates())).toList());
         map.put("blocking", node.blocking().stream().map(this::refToMap).toList());
         return map;
     }
 
     private Map<String, Object> refToMap(IssueRef ref) {
         return Map.of("number", ref.number(), "repo", ref.repo());
+    }
+
+    private Map<String, Object> refWithState(IssueRef ref, Map<IssueRef, String> issueStates) {
+        var state = issueStates.getOrDefault(ref, "EXTERNAL");
+        return Map.of("number", ref.number(), "repo", ref.repo(), "state", state);
     }
 }
 ```
@@ -1096,7 +1105,9 @@ void emitsRealBlockerStateFromGraph() {
         List.of(), Map.of(
             IssueStatus.BLOCKED, List.of(),
             IssueStatus.UNBLOCKED, List.of(graphNode),
-            IssueStatus.CLEAR, List.of()));
+            IssueStatus.CLEAR, List.of()),
+        Map.of(new IssueRef(19, "Hortora/trellis"), "OPEN",
+               new IssueRef(11, "Hortora/trellis"), "CLOSED"));
 
     var stateMap = Map.of(new IssueRef(11, "Hortora/trellis"), "CLOSED");
 
@@ -1247,6 +1258,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 export interface IssueRefData {
   number: number;
   repo: string;
+  state?: string;
 }
 
 export interface DependencyNode {
@@ -1469,11 +1481,9 @@ export class TrellisBlockersPanel extends LitElement {
   }
 
   private _blockerClass(blocker: IssueRefData): string {
-    if (!this._data) return 'external';
-    const found = [...this._data.blocked, ...this._data.unblocked, ...this._data.clear]
-      .find(n => n.number === blocker.number && n.repo === blocker.repo);
-    if (!found) return 'external';
-    return found.issueState === 'CLOSED' ? 'closed' : 'open';
+    if (blocker.state === 'CLOSED') return 'closed';
+    if (blocker.state === 'OPEN') return 'open';
+    return 'external';
   }
 }
 ```
