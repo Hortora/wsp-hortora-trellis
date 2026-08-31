@@ -12,3 +12,4 @@
 {"ts": "2026-08-30T20:44:54.886997+00:00", "mode": "wrap", "action": "user_input", "step": "garden_feedback", "steps_executed": [], "error": ""}
 {"ts": "2026-08-30T20:45:00.770683+00:00", "mode": "wrap", "action": "user_input", "step": "notes", "steps_executed": [], "error": ""}
 {"ts": "2026-08-30T20:45:07.082729+00:00", "mode": "wrap", "action": "user_input", "step": "handoff_write", "steps_executed": [], "error": ""}
+{"ts": "2026-08-30T20:46:20.863687+00:00", "mode": "wrap", "action": "complete", "step": "", "steps_executed": ["wip_commit"], "error": ""}
