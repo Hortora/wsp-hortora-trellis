@@ -1,0 +1,13 @@
+# Work Plan — Work Plan —
+
+## State
+state: active
+
+## Queue
+- [x] hortora/trellis#66 — Workspace root scoping not applied to all panels
+- [ ] hortora/trellis#70 — Use directory-watcher to auto-refresh repo and slot display on file changes ← active
+- [ ] hortora/trellis#69 — Slot status field parse and display active-paused
+- [ ] hortora/trellis#67 — Show plan batch state and progress in slot modal
+- [ ] hortora/trellis#68 — Show work lifecycle steps and captured output in slot modal
+- [ ] hortora/trellis#71 — Backlog panel tree table view for epic hierarchy
+- [ ] hortora/trellis#72 — Backlog panel multi-select repo filter
