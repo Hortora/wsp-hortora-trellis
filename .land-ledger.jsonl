@@ -1,2 +1,0 @@
-{"event":"land","repo":"trellis","branch":"issue-66-workspace-root-scoping","base_branch":"main","landed_sha":"1f5c53edf7b19f8d8e49f85f71bd686ca2cf5b17","push_target":"origin","mirrored":false,"stamped":true,"timestamp":"2026-09-06T22:22:38.156934+00:00"}
-{"event":"promote","branch":"issue-70-directory-watcher-auto-refresh","files":[],"timestamp":"2026-09-07T02:33:56.912570+00:00"}
