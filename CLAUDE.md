@@ -1,12 +1,12 @@
 # trellis Workspace
 
 **Name:** trellis
-**Project repo:** /Users/mdproctor/claude/hortora/trellis
+**Project repo:** proj/
 **Workspace type:** public
 
 ## Session Start
 
-Run `add-dir /Users/mdproctor/claude/hortora/trellis` and `add-dir /Users/mdproctor/claude/public/hortora/trellis` before any other work.
+Run `# add-dir removed — use proj/ symlink instead and `# add-dir removed — use proj/ symlink instead before any other work.
 
 ## Artifact Locations
 
@@ -34,13 +34,13 @@ Run `add-dir /Users/mdproctor/claude/hortora/trellis` and `add-dir /Users/mdproc
 ## Git Discipline
 
 Two git repositories are active in every session:
-- **Workspace** (`/Users/mdproctor/claude/public/hortora/trellis`) — plans, blog, snapshots, handover
-- **Project repo** (`/Users/mdproctor/claude/hortora/trellis`) — source code, ADRs, specs
+- **Workspace** (wksp/) — plans, blog, snapshots, handover
+- **Project repo** (proj/) — source code, ADRs, specs
 
 Never rely on CWD for git operations. Always use explicit paths:
 ```bash
-git -C /Users/mdproctor/claude/public/hortora/trellis add <file>   # workspace
-git -C /Users/mdproctor/claude/hortora/trellis add <file>          # project
+git -C proj/ add <file>   # workspace
+git -C proj/ add <file>          # project
 ```
 
 ## Rules
@@ -60,6 +60,6 @@ git -C /Users/mdproctor/claude/hortora/trellis add <file>          # project
 | snapshots  | workspace   |
 | handover   | workspace   |
 
-**Blog directory:** `/Users/mdproctor/claude/public/hortora/trellis/blog/`
+**Blog directory:** `wksp/`
 
 @/Users/mdproctor/claude/hortora/trellis/CLAUDE.md
