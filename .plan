@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-67-plan-batch-state
-state: active
+state: closing:promoted
 project-sha: e4be95ed0e02f0969a43bf0230cdb968d2288ca3
 date: 2026-09-07
 issue-repo: Hortora/trellis
@@ -11,6 +11,7 @@ design-repo: project
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
 - [ ] hortora/trellis#67 — Issue #67 ← active
   - [x] Batch 1: Backend
