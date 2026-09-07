@@ -151,8 +151,11 @@ Expose existing private methods as package-private for partial rescan:
 - `scanSlots(Path root)` → `List<SlotInfo>` (already exists as private)
 - `scanWorkspaces(Path root, ...)` → epics + pauses (already exists as private)
 
-Add protocol-specific scan if needed, or reuse the existing repos scan
-(protocol availability correlates with repo presence).
+No protocol-specific scan method needed. The `PROTOCOLS` domain is
+signal-only — when `PathDomainClassifier` detects an `INDEX.md` change,
+`FileWatcherService` broadcasts `workspace:protocols` without rescanning.
+The protocol panel re-fetches via `GET /api/protocols/repos?root=...`
+which reads INDEX.md directly from disk.
 
 No new scanning logic — just visibility changes to enable domain-scoped calls.
 
@@ -200,9 +203,21 @@ export function subscribeWorkspace(
 ): () => void { ... }  // returns unsubscribe function
 ```
 
-One EventSource connection for all `workspace:*` topics. Panels call
-`subscribeWorkspace()` in `connectedCallback()` and the returned
-unsubscribe function in `disconnectedCallback()`.
+**Connection strategy:** One shared EventSource subscribes to ALL
+`workspace:*` topics up front (`/api/push?topics=workspace:repos&topics=
+workspace:slots&topics=workspace:protocols&topics=workspace:lifecycle&
+topics=workspace:worklog`). The `subscribeWorkspace()` helper filters
+incoming messages client-side by the `topics` parameter, invoking the
+callback only for matching topics. This avoids reconnecting the
+EventSource when new panels mount — all topics are already subscribed.
+The cost of receiving unused topics is negligible (workspace events are
+infrequent).
+
+The shared connection is created lazily on first `subscribeWorkspace()`
+call and closed when the last subscriber unsubscribes.
+
+Panels call `subscribeWorkspace()` in `connectedCallback()` and the
+returned unsubscribe function in `disconnectedCallback()`.
 
 #### Panel changes
 
