@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-70-directory-watcher-auto-refresh
-state: active
+state: closing:promoted
 project-sha: d9e8804bcc652aaa1f0be6adc867c5e14b8038ed
 date: 2026-09-06
 issue-repo: Hortora/trellis
@@ -11,6 +11,7 @@ design-repo: workspace
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
 - [x] hortora/trellis#70 — Issue #70
 - [ ] hortora/trellis#69 — Slot status field parse and display active-paused ← active
