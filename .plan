@@ -13,3 +13,7 @@ flyway-next-v: none
 
 ## Queue
 - [ ] hortora/trellis#67 — Issue #67 ← active
+  - [ ] Batch 1: Backend
+    - [ ] Task 1: Create records and plan parser with tests
+  - [ ] Batch 2: Frontend
+    - [ ] Task 2: Render plan batch tree in sidebar
