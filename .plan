@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-75-tamboui-repl
-state: active
+state: closing:promoted
 project-sha: 2c494cd0df500db5a3a6a34310235dc67efee6f6
 date: 2026-09-10
 issue-repo: Hortora/trellis
@@ -11,20 +11,6 @@ design-repo: project
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
-- [ ] hortora/trellis#75 — Issue #75 ← active
-  - [x] Batch 1: TUI Skeleton
-    - [x] Task 1: Maven module and Tamboui bootstrap
-  - [x] Batch 2: Command Engine
-    - [x] Task 2: YAML command model and registry
-  - [x] Batch 3: Soredium Bridge
-    - [x] Task 3: JSON Lines CLI wrapper
-    - [x] Task 4: Java SorediumBridge
-  - [x] Batch 4: Sidecar Client
-    - [x] Task 5: HTTP and SSE client
-  - [x] Batch 5: Full Commands
-    - [x] Task 6: Handler dispatch and shell commands
-  - [x] Batch 6: Goal Runner
-    - [x] Task 7: Q&A guided flows
-  - [x] Batch 7: Status Bar
-    - [x] Task 8: SSE subscription and reactive status
+- [x] hortora/trellis#75 — Issue #75
