@@ -1,0 +1,26 @@
+# Work Plan — issue-77-repl-integration
+
+## State
+branch: issue-77-repl-integration
+state: active
+project-sha: 4ee5ff433425c973e9f5f998b7173f8b5bbb63f0
+date: 2026-09-10
+issue-repo: Hortora/trellis
+covers: 77
+design-repo: project
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#77 — Issue #77 ← active
+  - [ ] Batch 1: Widget
+    - [ ] Task 1: SuggestionInput Tamboui widget
+  - [ ] Batch 2: Modal View
+    - [ ] Task 2: Split/tab view in repo and slot detail
+  - [ ] Batch 3: Sidecar
+    - [ ] Task 3: REPL terminal spawning and lifecycle
+  - [ ] Batch 4: Polish
+    - [ ] Task 4: REPL command history
+
+## Deferred
+- [ ] Soredium cli/ wrapper merge to main (XS / Low) [] — Committed on issue-353-write-marker-step branch in soredium — needs merging to soredium main before REPL can use it in production
