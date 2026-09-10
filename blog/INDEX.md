@@ -10,3 +10,4 @@
 | [2026-08-12-mdp01-closing-pages-runtime-gaps.md](2026-08-12-mdp01-closing-pages-runtime-gaps.md) | 2026-08-12 | Gap assessment and consumer-side integration of pages-runtime zone picker, organiser toolbar, and detach button into trellis workspace view |
 | [2026-08-13-mdp01-three-small-things-that-share-a-branch.md](2026-08-13-mdp01-three-small-things-that-share-a-branch.md) | 2026-08-13 | Batched three issues: per-frame font size cycling, repo-detail 409 fix, and provenance contract testing |
 | [2026-09-07-mdp01-closing-the-last-gap-in-slot-visibility.md](2026-09-07-mdp01-closing-the-last-gap-in-slot-visibility.md) | 2026-09-07 | Plan batch state parsing and sidebar rendering in the slot detail modal |
+| [2026-09-10-mdp01-when-the-repl-stops-needing-permission.md](2026-09-10-mdp01-when-the-repl-stops-needing-permission.md) | 2026-09-10 | Designing and building a Tamboui REPL for mechanical work lifecycle in Trellis — LLM augments but isn't required |
