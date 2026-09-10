@@ -19,20 +19,23 @@ A Tamboui-based Java REPL that runs inside a tmux terminal, paired with an LLM t
 ```
 Trellis Sidecar
   ├── creates tmux session: REPL terminal
-  ├── creates tmux session: LLM terminal
+  ├── creates tmux session: LLM terminal (existing agent terminal)
   └── serves pages transport (REST/SSE/WS)
 
-REPL Process (Quarkus CLI + Tamboui)
-  ├── spawned into REPL tmux session
+REPL Process (lightweight Java CLI + Tamboui)
+  ├── spawned into REPL tmux session via sidecar sendKeys
   ├── receives: --repo, --slot, --issue, --sidecar-port, --paired-terminal
-  ├── connects to sidecar via pages transport
-  ├── shells out to soredium Python commands
-  └── dispatches to LLM via sendKeys to paired terminal
+  ├── connects to sidecar via pages transport (java.net.http + SSE client)
+  ├── lifecycle commands via soredium CLI wrapper (JSON Lines protocol)
+  ├── LLM dispatch via sidecar REST: POST /api/terminals/{name}/input
+  └── agent lifecycle via sidecar REST: POST /api/terminals/{name}/agent/*
 
-Modal View (existing repo/slot modal)
-  ├── Split view (default): REPL + LLM side by side
-  └── Tab view: switch between REPL and LLM
+Crash recovery: sidecar's TerminalRegistry.bootstrap() recovers the tmux
+session on restart. The REPL process is re-spawned by sending the launch
+command to the recovered session.
 ```
+
+**Not Quarkus.** The REPL is a lightweight Java CLI — Tamboui + java.net.http. No CDI container, no Quarkus bootstrap. The REPL is a presentation layer (TUI, autocomplete, goals) and a dispatch layer (calling sidecar REST API). All application logic stays in the sidecar.
 
 ### Module Structure
 
@@ -40,29 +43,48 @@ New Maven module at `repl/` in trellis root, sibling to `sidecar/` and `shell/`.
 
 ```
 repl/
-  pom.xml                          # Quarkus CLI + Tamboui deps
+  pom.xml                          # Tamboui + java.net.http (no Quarkus)
   src/main/java/io/hortora/trellis/repl/
-    ReplMain.java                  # @QuarkusMain entry point
+    ReplMain.java                  # main() entry point
     ReplApp.java                   # Tamboui app, status bar, input widget
     command/
       CommandRegistry.java         # Namespace tree, tab completion, dispatch
       CommandDefinition.java       # YAML-loaded command model
       GoalDefinition.java          # YAML-loaded goal model (Q&A flows)
       GoalRunner.java              # Executes goal steps, collects answers, shows summary
-      WorkCommands.java            # work start/end/pause/resume/continue/next/status
-      GitCommands.java             # git status/log/diff/commit/branch/stash
-      ProjectCommands.java         # build/test/run (project-type aware)
-      LlmCommands.java             # LLM dispatch via sendKeys to paired terminal
     input/
       SuggestionInput.java         # Unified text+click input widget
       SuggestionSource.java        # Interface for autocomplete data providers
     sidecar/
-      SidecarClient.java           # Pages transport connection to sidecar
+      SidecarClient.java           # HTTP client + SSE subscription to sidecar
     soredium/
-      SorediumBridge.java          # Shells out to soredium Python commands
+      SorediumBridge.java          # Invokes soredium CLI wrapper, parses JSON Lines events
   src/main/resources/
     commands.yaml                  # Command tree + goal definitions
 ```
+
+**Command dispatch is via sidecar REST API, not direct method calls.** The REPL never touches `TerminalRegistry`, `AgentProcessManager`, or `TmuxManager` directly. It calls:
+- `POST /api/terminals/{name}/input` — send text to paired LLM terminal
+- `POST /api/terminals/{name}/agent/start` — spawn agent on demand
+- `GET /api/terminals` — check agent state
+- Plus existing worklog, dependency, intelligence endpoints
+
+### Soredium Bridge
+
+Soredium commands (`commands/start.py`, `commands/end.py`, etc.) are Python modules with `execute()` functions, not CLI entry points. The bridge requires a CLI wrapper:
+
+```
+soredium/cli/__main__.py          # JSON Lines CLI wrapper
+  ├── accepts: command name + kwargs as JSON
+  ├── calls: commands/<name>.execute(**kwargs)
+  ├── emits: JSON Lines events (StepProgress, BranchCreated, WorkEnded, CommandFailed)
+  └── exit code: 0 success, 1 failure
+
+REPL invokes: python3 -m soredium.cli start '{"issue": 42, "repo": "..."}'
+REPL reads: JSON Lines from stdout, updates TUI accordingly
+```
+
+This CLI wrapper is a new addition to soredium — a thin layer that serialises the existing event stream.
 
 ### Mechanical-First Principle
 
@@ -86,12 +108,12 @@ The work lifecycle runs without an LLM. The LLM augments with higher-value opera
 
 ### LLM Dispatch
 
-The REPL dispatches to the LLM by typing commands into the paired terminal via `sendKeys`. From the LLM's perspective, a human typed the command. The session chat history accumulates naturally.
+The REPL dispatches to the LLM by sending text to the paired terminal via the sidecar REST API. From the LLM's perspective, a human typed the command. The session chat history accumulates naturally.
 
 The LLM is spawned on demand — when a user invokes an `llm` command, the REPL:
-1. Checks if an agent is running in the paired terminal (via sidecar REST)
-2. If not, starts one (via `AgentProcessManager.startAgent()`)
-3. Sends the command text via `TerminalRegistry.sendKeys()`
+1. Checks if an agent is running in the paired terminal: `GET /api/terminals/{paired-terminal}`
+2. If not, starts one: `POST /api/terminals/{paired-terminal}/agent/start`
+3. Sends the command text: `POST /api/terminals/{paired-terminal}/input`
 4. The user sees the LLM working in the split view
 
 The LLM is abstracted — not Claude-specific. The agent start mechanism and command format are configurable.
@@ -222,7 +244,8 @@ This is more constrained than the workspace view — fixed to two terminals, no 
 - Standalone `isx` command namespace (isx list, isx ssh, etc.)
 - Java replacements for soredium Python commands (incremental migration)
 - Additional goal definitions as usage patterns emerge
-- REPL history and command recall
+- REPL history and command recall (check if Tamboui provides this natively)
+- Coordination with claudony extraction (#48) — terminal/agent code may move to shared platform layer
 
 ## References
 
