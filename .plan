@@ -1,0 +1,15 @@
+# Work Plan — issue-75-tamboui-repl
+
+## State
+branch: issue-75-tamboui-repl
+state: scaffolded
+project-sha: 2c494cd0df500db5a3a6a34310235dc67efee6f6
+date: 2026-09-10
+issue-repo: Hortora/trellis
+covers: 75
+design-repo: project
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#75 — Issue #75 ← active
