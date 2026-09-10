@@ -1,0 +1,14 @@
+format_version: 1
+state: SPEC_SELF_REVIEW
+entered: 2026-09-10T00:00:00Z
+decision_count: 11
+dimensions_completed: 0
+dimensions_total: 0
+ordered: false
+dimensions_done:
+current_dimension:
+workspace_structure:
+workspace_coherence:
+workspace_robustness:
+workspace_crosscutting:
+workspace_decision:
