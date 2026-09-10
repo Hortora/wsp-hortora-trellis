@@ -2,22 +2,17 @@
 
 ## Last Session
 
-Designed and implemented the Tamboui REPL for mechanical work lifecycle (#75). The core insight: the work lifecycle (start/pause/resume/end/next) doesn't need an LLM — it's state machine transitions. The REPL handles those mechanically; the LLM augments with sweeps, squashes, and reviews when opted into.
-
-Built `repl/` Maven module — lightweight Java CLI (Tamboui 0.4.0, no Quarkus). YAML-defined command tree with four namespaces (work/git/project/llm), tab completion, GoalRunner for Q&A guided flows, SorediumBridge calling Python commands via JSON Lines subprocess protocol, SidecarClient for REST API + SSE agent state. 32 tests. Also built `cli/` JSON Lines wrapper in soredium. Landed as single squashed commit on main.
-
-Filed #76 for ARIA compliance across all Trellis frontend components (zero `role`/`aria-*` attributes currently — blocks pages tutorial system integration).
+Continued #77 (REPL integration). Built the SuggestionInput widget — `SuggestionInputState` with pluggable `SuggestionSource`, filtered suggestions with wrap-around navigation (Up/Down/Tab/Enter/Escape), `SuggestionInputRenderer` drawing dropdown overlay above the output area. Wired into ReplApp replacing the raw TextInput. Also filed continuation issues: #78 (isx namespace), #79 (Java migration), #81 (goal definitions), closed #80 (redundant with #48). Filed soredium#357 for CLI wrapper merge. 44 tests, all passing.
 
 ## Immediate Next Step
 
-Continue #75 — three pieces remain: SuggestionInput widget (Tamboui text+click composition), modal view integration (frontend split/tab in repo/slot detail), sidecar REPL terminal spawning. Blog entry on branch is partial — continuation session should extend it.
+Continue #77 Batch 2 — modal view integration. Modify `trellis-repo-detail` and `trellis-slot-detail` (TypeScript) to support split-view showing REPL + LLM terminals side by side, with tab mode alternative. Then Batch 3 (sidecar REPL spawning) and Batch 4 (command history).
 
 ## Cross-Module
 
-- Soredium `cli/` wrapper committed on `issue-353-write-marker-step` branch — needs merging to main.
+- Soredium `cli/` wrapper on `issue-353-write-marker-step` branch — soredium#357, needs merging before REPL can use it in production.
 
 ## References
 
 - Design spec: `docs/specs/issue-75-tamboui-repl/2026-09-10-tamboui-repl-design.md`
-- Decisions: `docs/specs/issue-75-tamboui-repl/decisions.md`
 - Blog: `blog/2026-09-10-mdp01-when-the-repl-stops-needing-permission.md`
