@@ -23,4 +23,4 @@ flyway-next-v: none
     - [ ] Task 4: REPL command history
 
 ## Deferred
-- [ ] Soredium cli/ wrapper merge to main (XS / Low) [] — Committed on issue-353-write-marker-step branch in soredium — needs merging to soredium main before REPL can use it in production
+- [ ] Additional goal definitions (S / Low) [] — Add as usage patterns emerge
