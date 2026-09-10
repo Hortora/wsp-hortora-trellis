@@ -15,8 +15,8 @@ flyway-next-v: none
 - [ ] hortora/trellis#77 — Issue #77 ← active
   - [x] Batch 1: Widget
     - [x] Task 1: SuggestionInput Tamboui widget
-  - [ ] Batch 2: Modal View
-    - [ ] Task 2: Split/tab view in repo and slot detail
+  - [x] Batch 2: Modal View
+    - [x] Task 2: Split/tab view in repo and slot detail
   - [ ] Batch 3: Sidecar
     - [ ] Task 3: REPL terminal spawning and lifecycle
   - [ ] Batch 4: Polish
