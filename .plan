@@ -17,7 +17,7 @@ flyway-next-v: none
     - [x] Task 1: SuggestionInput Tamboui widget
   - [x] Batch 2: Modal View
     - [x] Task 2: Split/tab view in repo and slot detail
-  - [ ] Batch 3: Sidecar
-    - [ ] Task 3: REPL terminal spawning and lifecycle
+  - [x] Batch 3: Sidecar
+    - [x] Task 3: REPL terminal spawning and lifecycle
   - [ ] Batch 4: Polish
     - [ ] Task 4: REPL command history
