@@ -19,5 +19,5 @@ flyway-next-v: none
     - [x] Task 2: Split/tab view in repo and slot detail
   - [x] Batch 3: Sidecar
     - [x] Task 3: REPL terminal spawning and lifecycle
-  - [ ] Batch 4: Polish
-    - [ ] Task 4: REPL command history
+  - [x] Batch 4: Polish
+    - [x] Task 4: REPL command history
