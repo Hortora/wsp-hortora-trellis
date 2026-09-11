@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-77-repl-integration
-state: active
+state: closing:review
 project-sha: 4ee5ff433425c973e9f5f998b7173f8b5bbb63f0
 date: 2026-09-10
 issue-repo: Hortora/trellis
@@ -11,13 +11,6 @@ design-repo: project
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
-- [ ] hortora/trellis#77 — Issue #77 ← active
-  - [x] Batch 1: Widget
-    - [x] Task 1: SuggestionInput Tamboui widget
-  - [x] Batch 2: Modal View
-    - [x] Task 2: Split/tab view in repo and slot detail
-  - [x] Batch 3: Sidecar
-    - [x] Task 3: REPL terminal spawning and lifecycle
-  - [x] Batch 4: Polish
-    - [x] Task 4: REPL command history
+- [x] hortora/trellis#77 — Issue #77
