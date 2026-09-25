@@ -1,7 +1,7 @@
 format_version: 1
-state: CONTEXT_GATHERING
-entered: 2026-09-25T14:30:00Z
-decision_count: 0
+state: DECISION_REVIEW
+entered: 2026-09-25T14:45:00Z
+decision_count: 5
 dimensions_completed: 0
 dimensions_total: 0
 ordered: false
