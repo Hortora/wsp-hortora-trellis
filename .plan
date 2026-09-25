@@ -1,0 +1,15 @@
+# Work Plan — issue-68-slot-lifecycle-steps
+
+## State
+branch: issue-68-slot-lifecycle-steps
+state: scaffolded
+project-sha: cd8ac70f8d880d7166040dab972a557cac79f8f8
+date: 2026-09-25
+issue-repo: Hortora/trellis
+covers: 68
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#68 — Issue #68 ← active
