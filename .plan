@@ -1,0 +1,15 @@
+# Work Plan — issue-86-terminal-lifecycle
+
+## State
+branch: issue-86-terminal-lifecycle
+state: scaffolded
+project-sha: eb5a14d98d1138541e559c681d608cc00a1d8c48
+date: 2026-09-25
+issue-repo: Hortora/trellis
+covers: 86
+design-repo: project
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#86 — Issue #86 ← active
