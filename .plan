@@ -13,3 +13,12 @@ flyway-next-v: none
 
 ## Queue
 - [ ] hortora/trellis#86 — Issue #86 ← active
+  - [ ] Batch 1: Component Guard
+    - [ ] Task 1: Configure guard in pages-component-terminal
+    - [ ] Task 2: Reconnect max attempts cap
+  - [ ] Batch 2: Backend
+    - [ ] Task 3: Lock and verifyShellForeground in refreshAgent
+  - [ ] Batch 3: Frontend
+    - [ ] Task 4: Split _snapshot into _terminalName + _agentState
+    - [ ] Task 5: Simplify focus — replace mousedown with @click
+    - [ ] Task 6: Apply state separation to slot-detail
