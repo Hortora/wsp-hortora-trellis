@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-86-terminal-lifecycle
-state: active
+state: closing:promoted
 project-sha: eb5a14d98d1138541e559c681d608cc00a1d8c48
 date: 2026-09-25
 issue-repo: Hortora/trellis
@@ -11,14 +11,6 @@ design-repo: project
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
-- [ ] hortora/trellis#86 — Issue #86 ← active
-  - [x] Batch 1: Component Guard
-    - [x] Task 1: Configure guard in pages-component-terminal
-    - [x] Task 2: Reconnect max attempts cap
-  - [x] Batch 2: Backend
-    - [x] Task 3: Lock and verifyShellForeground in refreshAgent
-  - [x] Batch 3: Frontend
-    - [x] Task 4: Split _snapshot into _terminalName + _agentState
-    - [x] Task 5: Simplify focus — replace mousedown with @click
-    - [x] Task 6: Apply state separation to slot-detail
+- [x] hortora/trellis#86 — Issue #86
