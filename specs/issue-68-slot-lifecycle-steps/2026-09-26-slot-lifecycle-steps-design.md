@@ -44,7 +44,7 @@ record OperationProgress(
 - `operationCompleted(operationId)` → marks operation COMPLETED, broadcasts SSE
 - `getProgress(operationId)` → returns current state (for GET endpoint)
 - `getActiveOperation(slotId)` → returns active operation for a slot (for page refresh)
-- Evicts completed operations after 5 minutes (they are short-lived, no need for persistence)
+- Evicts completed operations after 5 minutes via `@Scheduled(every = "60s")` sweep — removes entries where `completedAt` is older than 5 minutes. Not lazy eviction — the GET endpoint must never return stale data
 
 SSE publishing uses `EventBroadcaster.broadcast("lifecycle:progress", json)` where the JSON payload includes the operationId, the step name, the new state, and captured output.
 
@@ -187,7 +187,9 @@ Event payload:
 
 When a step completes or fails, `stdout` and `stderr` are populated with the captured output from that step.
 
-Frontend subscribes via the existing `workspace-sse.ts` pattern — add `lifecycle:progress` to the topic list in `slot-detail.ts`'s `_subscribeEvents()`.
+Frontend subscribes directly in `slot-detail.ts`'s `_subscribeEvents()` — add `lifecycle:progress` to the existing `EventSource` URL alongside `agent:state,agent:eviction`. This is a component-scoped subscription, NOT added to the global `ALL_WORKSPACE_TOPICS` in `workspace-sse.ts` (lifecycle progress is only relevant to the slot detail view).
+
+On SSE reconnection (EventSource `onerror` → automatic reconnect), re-fetch `GET /api/lifecycle/operations?slot={slotId}` to recover any missed events during the connection gap.
 
 ## Frontend — Slot Detail Sidebar
 
