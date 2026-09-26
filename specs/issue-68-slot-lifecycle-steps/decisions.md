@@ -54,7 +54,7 @@
 **Trade-offs:** In-memory state — lost on sidecar restart. Acceptable because lifecycle operations are short-lived (seconds to minutes) and a restart would kill the operation anyway.
 **Sources:** `AgentProcessManager` (precedent for in-memory state with SSE updates + GET snapshots)
 **Exploration:** quick
-**Status:** captured
+**Status:** revised — see D7
 
 ## D6: Backend architecture — dedicated OperationTracker
 
@@ -65,5 +65,18 @@
 **Trade-offs:** One more class. LifecycleManager must call tracker at step boundaries, creating a coupling.
 **Depends on:** D2 (fully async execution model)
 **Sources:** `LifecycleManager.java` (current structure), `AgentProcessManager` (precedent for state-tracking CDI bean)
+**Exploration:** quick
+**Status:** captured
+
+## D7: Operation state durability
+
+**Choice:** File-backed log — write a JSON operation file to `.trellis/operations/{id}.json` at each step transition
+**Alternatives:**
+- Derive from filesystem — infer state from git branch positions and .plan lifecycle state; cheaper but can't determine which step failed or why
+- Accept ephemeral — rely on operations being short-lived; simplest but weakest consistency
+**Rationale:** Crash recovery requires knowing which step was running and what its output was. The filesystem (git, .plan) tells you the current state but not the operation context. A lightweight file log bridges this gap with minimal overhead.
+**Trade-offs:** One file write per step transition (~7 writes for a 4-step operation). Negligible I/O cost. Files must be cleaned up after completion (same 5-minute eviction applies to disk).
+**Depends on:** D5 (server-side state), D6 (dedicated OperationTracker)
+**Sources:** `.trellis/layouts/` (precedent for file-backed state under .trellis directory)
 **Exploration:** quick
 **Status:** captured

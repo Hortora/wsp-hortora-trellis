@@ -44,7 +44,9 @@ record OperationProgress(
 - `operationCompleted(operationId)` → marks operation COMPLETED, broadcasts SSE
 - `getProgress(operationId)` → returns current state (for GET endpoint)
 - `getActiveOperation(slotId)` → returns active operation for a slot (for page refresh)
-- Evicts completed operations after 5 minutes via `@Scheduled(every = "60s")` sweep — removes entries where `completedAt` is older than 5 minutes. Not lazy eviction — the GET endpoint must never return stale data
+- Evicts completed operations after 5 minutes via `@Scheduled(every = "60s")` sweep — removes in-memory entries and deletes the backing file where `completedAt` is older than 5 minutes
+- **File-backed durability:** Each step transition writes the full `OperationProgress` to `.trellis/operations/{operationId}.json` in the workspace root. On startup, `LifecycleOperationTracker` scans this directory and loads any incomplete operations into memory (state = RUNNING or a step in RUNNING state). This handles sidecar restart mid-operation — the tracker recovers the last known state and marks the interrupted step as FAILED (since the background thread that was executing it no longer exists)
+- File writes use atomic rename (`write to .tmp`, `rename to .json`) to avoid partial reads
 
 SSE publishing uses `EventBroadcaster.broadcast("lifecycle:progress", json)` where the JSON payload includes the operationId, the step name, the new state, and captured output.
 
@@ -286,7 +288,7 @@ Clear `_actionInProgress` when the SSE stream reports `operationState: 'COMPLETE
 ## Edge Cases
 
 - **Concurrent operation:** `SlotAgentCoordinator` lock prevents concurrent operations on the same slot. HTTP 409 returned. Frontend disables buttons via `_actionInProgress`.
-- **Sidecar restart during operation:** In-memory state is lost. The background thread dies. Frontend SSE reconnects but no active operation exists. The operation is effectively cancelled. The slot's filesystem state is the source of truth — the user can retry.
+- **Sidecar restart during operation:** On restart, `LifecycleOperationTracker` loads incomplete operations from `.trellis/operations/`. Any step in RUNNING state is marked FAILED (the thread is gone). The frontend re-fetches via the GET endpoint and sees the partially-completed operation with the interrupted step marked as failed. The user can see where it stopped and retry.
 - **Script timeout:** `ScriptRunner` has a 120s timeout per script. If a step times out, it's marked FAILED with the timeout error. The operation stops at the failed step.
 - **Page refresh mid-operation:** `GET /api/lifecycle/operations?slot={slotId}` returns the current `OperationProgress`. Frontend picks up from the current state; subsequent SSE events update from there.
 - **No active operation:** `_renderLifecycle()` returns `nothing`. The section is invisible — no empty state needed.
