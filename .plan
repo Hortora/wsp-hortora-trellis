@@ -13,3 +13,12 @@ flyway-next-v: none
 
 ## Queue
 - [ ] hortora/trellis#68 — Issue #68 ← active
+  - [ ] Batch 1: Foundation
+    - [ ] Task 1: Records and StepFailedException
+    - [ ] Task 2: LifecycleOperationTracker
+  - [ ] Batch 2: Async Orchestration
+    - [ ] Task 3: LifecycleManager async step methods
+    - [ ] Task 4: SlotAgentCoordinator async + REST API
+  - [ ] Batch 3: Frontend
+    - [ ] Task 5: Lifecycle progress sidebar
+    - [ ] Task 6: Integration verification
