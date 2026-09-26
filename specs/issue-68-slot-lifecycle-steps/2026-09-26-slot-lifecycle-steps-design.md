@@ -41,7 +41,7 @@ record OperationProgress(
 - `stepStarted(operationId, stepName)` → updates step to RUNNING, broadcasts SSE
 - `stepCompleted(operationId, stepName, stdout, stderr)` → updates step to DONE, broadcasts SSE
 - `stepFailed(operationId, stepName, stdout, stderr)` → updates step to FAILED, marks operation FAILED, broadcasts SSE
-- `operationFailed(operationId, errorMessage)` → marks operation FAILED with error detail, broadcasts SSE. Handles exceptions occurring outside of a named step (e.g., before the first step starts, or unexpected errors between steps)
+- `operationFailed(operationId, errorMessage)` → transitions any step currently in RUNNING state to FAILED (with the error message as stderr), then marks operation FAILED with error detail, broadcasts SSE. This enforces the invariant that no step remains RUNNING when the operation is FAILED — covering script timeouts (`IOException`), missing scripts, thread interruption, and any other exception thrown after `stepStarted()` but before `stepFailed()`/`stepCompleted()`
 - `operationCompleted(operationId)` → marks operation COMPLETED, broadcasts SSE
 - `getProgress(operationId)` → returns current state (for GET endpoint)
 - `getActiveOperation(slotId)` → returns active operation for a slot (for page refresh). Returns the most recent operation regardless of state (RUNNING, COMPLETED, or FAILED within the eviction window)
@@ -376,7 +376,7 @@ Clear `_actionInProgress` when the SSE stream reports `operationState: 'COMPLETE
 - **Concurrent operation:** `SlotAgentCoordinator` semaphore prevents concurrent operations on the same slot. HTTP 409 returned. Frontend disables buttons via `_actionInProgress`.
 - **Retry after failure:** When the user re-clicks a lifecycle action after a FAILED operation, `startOperation` auto-dismisses the previous FAILED operation for the same slot (removes from memory and file). The new operation starts fresh. No separate "dismiss" or "retry" UI is needed — the existing lifecycle buttons serve as the retry mechanism.
 - **Sidecar restart during operation:** On restart, `LifecycleOperationTracker` loads incomplete operations from `.trellis/operations/`. Any step in RUNNING state is marked FAILED (the thread is gone). The frontend re-fetches via the GET endpoint and sees the partially-completed operation with the interrupted step marked as failed. The user can see where it stopped and retry.
-- **Script timeout:** `ScriptRunner` has a 120s timeout per script. If a step times out, it's marked FAILED with the timeout error. The operation stops at the failed step.
+- **Script timeout:** `ScriptRunner` has a 120s timeout per script. The timeout throws `IOException`, which propagates to the coordinator's `catch (Exception e)` → `tracker.operationFailed()`. `operationFailed` transitions the RUNNING step to FAILED (with the timeout error) before marking the operation FAILED. The same mechanism handles missing script files and thread interruption.
 - **Page refresh mid-operation:** `GET /api/lifecycle/operations?slot={slotId}` returns the current `OperationProgress`. Frontend picks up from the current state; subsequent SSE events update from there.
 - **No active operation:** `_renderLifecycle()` returns `nothing`. The section is invisible — no empty state needed.
 - **Operation completes while modal is closed:** The operation runs server-side regardless of modal visibility. When the modal reopens, the GET endpoint returns the completed result (if within the eviction window) or nothing.
