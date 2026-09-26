@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-68-slot-lifecycle-steps
-state: active
+state: closing:promoted
 project-sha: cd8ac70f8d880d7166040dab972a557cac79f8f8
 date: 2026-09-25
 issue-repo: Hortora/trellis
@@ -11,6 +11,7 @@ design-repo: workspace
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
 - [ ] hortora/trellis#68 — Issue #68 ← active
   - [x] Batch 1: Foundation
