@@ -49,6 +49,8 @@ record OperationProgress(
 - **File-backed durability:** Each step transition writes the full `OperationProgress` to `.trellis/operations/{operationId}.json` in the workspace root. On startup, `LifecycleOperationTracker` scans this directory and loads any incomplete operations into memory (state = RUNNING or a step in RUNNING state). This handles sidecar restart mid-operation — the tracker recovers the last known state and marks the interrupted step as FAILED (since the background thread that was executing it no longer exists)
 - File writes use atomic rename (`write to .tmp`, `rename to .json`) to avoid partial reads
 
+**Immutability:** `OperationProgress` and `StepProgress` records use copy-on-write semantics. Each state transition creates a new `OperationProgress` instance with `List.copyOf(steps)` and atomically replaces the reference in the `ConcurrentHashMap`. `getProgress()` returns the current reference — an immutable snapshot that is never mutated. This is critical for thread safety: between the POST handler calling `getProgress()` and the HTTP framework serializing the response to JSON, the background thread may advance step state. The snapshot returned to the HTTP handler points to the old immutable state, preventing `ConcurrentModificationException` and ensuring the client receives a consistent view.
+
 SSE publishing uses `EventBroadcaster.broadcast("lifecycle:progress", json)` where the JSON payload includes the operationId, the step name, the new state, and captured output.
 
 ### Step definitions per operation
@@ -64,7 +66,15 @@ Each lifecycle operation declares its step list upfront so the tracker (and the 
 
 Agent coordination steps (`stop-agents`, `shutdown-agents`, `resume-agents`) come from `SlotAgentCoordinator`. Script steps come from `LifecycleManager`. The tracker treats them uniformly.
 
-All four operations are orchestrated by `SlotAgentCoordinator` via their respective `coordinatedXxxAsync` methods. `start` goes through `coordinatedStartAsync` even though it has no agent coordination step — the coordinator is the single entry point for all async lifecycle operations.
+**`end`, `pause`, `resume`** are orchestrated by `SlotAgentCoordinator` via their respective `coordinatedXxxAsync` methods — async with step progress tracking.
+
+**`start` remains synchronous** — no async orchestrator, no step progress UI. Rationale:
+1. The slot doesn't exist during `start` — there's no `TrellisSlotDetail` modal to render progress in
+2. `start` is invoked from workspace-level views (`TrellisEpicDashboard`, `EnhancedRecommendationCard`), not the slot detail sidebar
+3. `start` has no agent coordination step and completes quickly (route → create-branches → scaffold are lightweight git operations)
+4. `LifecycleResource.start()` continues to call `manager.start()` directly, returning `OperationResult` synchronously
+
+Step progress for `start` in a workspace-level progress indicator is a future enhancement (tracked separately from this issue).
 
 ### LifecycleManager changes
 
@@ -72,45 +82,62 @@ Current: methods like `end()` are synchronous, called from the HTTP request thre
 
 **Existing synchronous methods (`end`, `pause`, `resume`, `start`) are retained.** They continue to work for the `LifecycleActionExecutor` path (coordinator action system), which requires synchronous `ActionResult execute(ProposedAction)` semantics. No changes to these methods.
 
-New: lock-free async variants are added for use from `SlotAgentCoordinator`. These methods do NOT call `withLock()` — the coordinator owns the lock. They accept a `LifecycleOperationTracker` and an `operationId`, and report progress at each step boundary.
+New: async step variants are added for use from `SlotAgentCoordinator`. These methods acquire the workspace lock directly via `tryLock`/`unlock` (not via `withLock` — they skip CDI event firing, which the coordinator handles). They accept a `LifecycleOperationTracker` and an `operationId`, report progress at each step boundary, and throw `StepFailedException` on step failure.
 
 ```java
 public void endSteps(String slotId, Path workspaceRoot,
                      LifecycleOperationTracker tracker, String operationId)
-        throws IOException, InterruptedException {
-    tracker.stepStarted(operationId, "rebase");
-    var rebaseResult = scriptRunner.run("work-end", "land_branch.py",
-            List.of("rebase", workspaceRoot.toString()));
-    if (!rebaseResult.success()) {
-        tracker.stepFailed(operationId, "rebase",
-                rebaseResult.rawStdout(), rebaseResult.stderr());
-        return;
+        throws IOException, InterruptedException, ConcurrentOperationException,
+               StepFailedException {
+    if (!tryLock(workspaceRoot.toString())) {
+        throw new ConcurrentOperationException("Workspace operation in progress");
     }
-    tracker.stepCompleted(operationId, "rebase",
-            rebaseResult.rawStdout(), rebaseResult.stderr());
+    try {
+        tracker.stepStarted(operationId, "rebase");
+        var rebaseResult = scriptRunner.run("work-end", "land_branch.py",
+                List.of("rebase", workspaceRoot.toString()));
+        if (!rebaseResult.success()) {
+            tracker.stepFailed(operationId, "rebase",
+                    rebaseResult.rawStdout(), rebaseResult.stderr());
+            throw new StepFailedException("rebase");
+        }
+        tracker.stepCompleted(operationId, "rebase",
+                rebaseResult.rawStdout(), rebaseResult.stderr());
 
-    tracker.stepStarted(operationId, "push");
-    var pushResult = scriptRunner.run("work-end", "land_branch.py",
-            List.of("push", workspaceRoot.toString()));
-    // ... same pattern for each step
+        tracker.stepStarted(operationId, "push");
+        var pushResult = scriptRunner.run("work-end", "land_branch.py",
+                List.of("push", workspaceRoot.toString()));
+        // ... same pattern for each step
+    } finally {
+        unlock(workspaceRoot.toString());
+    }
 }
 ```
 
-**Lock consolidation:** The async variants (`endSteps`, `pauseSteps`, `resumeSteps`, `startSteps`) have no locking or CDI event responsibilities. The coordinator owns both. The existing `withLock()`-based methods remain for non-coordinator callers (`slotCreate`, `slotMerge`, `epicSetup`, `epicNext`).
+**`StepFailedException`:** A checked exception thrown after `tracker.stepFailed()` has already been called. Signals to the coordinator that a step failed and the tracker has been notified — the coordinator's catch block is a no-op for this exception type. This prevents the caller from unconditionally calling `operationCompleted()` after a step failure.
 
-**CDI events:** In the async path, `LifecycleOperationEvent` and `WorkspaceChanged` events are fired by the coordinator after operation completion (see SlotAgentCoordinator changes). This eliminates the dual-locking issue — the coordinator holds the sole lock, and fires both SSE and CDI events from the same context.
+**Workspace lock:** The async variants acquire `LifecycleManager.tryLock(workspaceRoot)` / `unlock(workspaceRoot)` directly — the same package-private lock used by `withLock()`. This provides mutual exclusion against non-coordinator operations (`slotCreate`, `slotMerge`, `epicSetup`, `epicNext`) that share the same workspace. Without this, the coordinator's per-slot Semaphore alone does NOT prevent concurrent git mutations from different operation types on the same workspace.
+
+Lock acquisition order is consistent and deadlock-free:
+1. Coordinator Semaphore(slotId) — acquired on HTTP thread, released on executor thread
+2. LifecycleManager lock(workspaceRoot) — acquired and released on executor thread
+3. Non-coordinator operations only acquire LifecycleManager lock(workspaceRoot) — no Semaphore
+
+**CDI events:** In the async path, `LifecycleOperationEvent` and `WorkspaceChanged` events are fired by the coordinator after operation completion (see SlotAgentCoordinator changes). The async step methods have no CDI event responsibilities.
 
 ### SlotAgentCoordinator changes
 
 **Existing synchronous methods (`coordinatedEnd`, `coordinatedPause`, `coordinatedResume`) are retained** for the `LifecycleActionExecutor` path. The action system calls these synchronously from its `action-executor` thread and translates the `OperationResult` into `ActionResult`. No changes needed to `ActionExecutor` or `LifecycleActionExecutor`.
 
-New async orchestrators are added: `coordinatedEndAsync`, `coordinatedPauseAsync`, `coordinatedResumeAsync`, and `coordinatedStartAsync`. They:
+New async orchestrators are added: `coordinatedEndAsync`, `coordinatedPauseAsync`, `coordinatedResumeAsync`. They:
 1. Acquire a per-slot `Semaphore(1)` (not `ReentrantLock` — semaphores have no thread affinity, so the HTTP thread can acquire and the executor thread can release)
-2. Create the operation in the tracker (which returns the full `OperationProgress`)
+2. Create the operation in the tracker and snapshot the initial `OperationProgress`
 3. Report agent coordination as named steps (e.g., `stop-agents`)
-4. Delegate to `LifecycleManager` lock-free async methods for the script steps
+4. Delegate to `LifecycleManager` async step methods (which acquire the workspace lock internally)
 5. Fire `LifecycleOperationEvent` CDI event and `WorkspaceChanged` event on completion
 6. Run on a `@ManagedExecutor` thread pool
+
+`start` is NOT included in the async pattern — see §Step definitions for rationale.
 
 ```java
 private final ConcurrentHashMap<String, Semaphore> slotLocks = new ConcurrentHashMap<>();
@@ -135,37 +162,12 @@ public OperationProgress coordinatedEndAsync(String slotId, Path workspaceRoot) 
             tracker.operationCompleted(operationId);
             fireLifecycleOperationEvent("end", true, null);
             fireWorkspaceChanged(workspaceRoot);
+        } catch (StepFailedException e) {
+            // tracker.stepFailed() already called inside endSteps — no action needed
+            fireLifecycleOperationEvent("end", false, e.getMessage());
         } catch (Exception e) {
             tracker.operationFailed(operationId, e.getMessage());
             fireLifecycleOperationEvent("end", false, e.getMessage());
-        } finally {
-            semaphore.release();
-        }
-    });
-
-    return progress;
-}
-
-public OperationProgress coordinatedStartAsync(Path workspaceRoot, String branch, String issue) {
-    var key = "start:" + workspaceRoot;
-    var semaphore = slotLocks.computeIfAbsent(key, k -> new Semaphore(1));
-    if (!semaphore.tryAcquire()) {
-        throw new ConcurrentOperationException("...");
-    }
-
-    var operationId = tracker.startOperation("start", key,
-            List.of("route", "create-branches", "scaffold"));
-    var progress = tracker.getProgress(operationId);
-
-    executor.submit(() -> {
-        try {
-            lifecycleManager.startSteps(workspaceRoot, branch, issue, tracker, operationId);
-            tracker.operationCompleted(operationId);
-            fireLifecycleOperationEvent("start", true, null);
-            fireWorkspaceChanged(workspaceRoot);
-        } catch (Exception e) {
-            tracker.operationFailed(operationId, e.getMessage());
-            fireLifecycleOperationEvent("start", false, e.getMessage());
         } finally {
             semaphore.release();
         }
@@ -205,20 +207,25 @@ This is the first `ManagedExecutor` usage in the project — the existing `Actio
 
 ### REST API changes
 
-**Modified endpoints** — return full `OperationProgress` (not just operationId) so the frontend has immediate renderable state:
+**Async endpoints** — return full `OperationProgress` so the frontend has immediate renderable state:
 
 ```
-POST /api/lifecycle/end/{slotId}     → OperationProgress JSON
-POST /api/lifecycle/pause/{slotId}   → OperationProgress JSON
-POST /api/lifecycle/resume/{slotId}  → OperationProgress JSON
-POST /api/lifecycle/start            → OperationProgress JSON
+POST /api/lifecycle/end/{slotId}     → OperationProgress JSON (HTTP 202 Accepted)
+POST /api/lifecycle/pause/{slotId}   → OperationProgress JSON (HTTP 202 Accepted)
+POST /api/lifecycle/resume/{slotId}  → OperationProgress JSON (HTTP 202 Accepted)
 ```
 
-HTTP 202 Accepted (not 200 OK) — the operation is accepted but not complete. The response body is the full `OperationProgress` with all steps in PENDING state and the operation in RUNNING state. SSE events update from this initial state.
+HTTP 202 Accepted — the operation is accepted but not complete. The response body is the full `OperationProgress` with all steps in PENDING state and the operation in RUNNING state. SSE events update from this initial state.
 
 HTTP 409 Conflict — concurrent operation in progress (unchanged).
 
-`LifecycleResource.start()` now routes through `SlotAgentCoordinator.coordinatedStartAsync()` instead of calling `LifecycleManager.start()` directly. This makes the coordinator the single entry point for ALL async lifecycle operations, regardless of whether agents are involved.
+**Synchronous endpoint** — `start` returns `OperationResult` as before (unchanged from current behavior):
+
+```
+POST /api/lifecycle/start            → OperationResult JSON (HTTP 200 OK)
+```
+
+`LifecycleResource.start()` continues to call `manager.start()` directly. No async orchestration needed (see §Step definitions for rationale).
 
 **New endpoint** — query current operation state:
 
@@ -248,6 +255,23 @@ Event payload:
 ```
 
 When a step completes or fails, `stdout` and `stderr` are populated with the captured output from that step.
+
+**Operation-level failure** (from `operationFailed`) uses the same topic with `step: null`:
+```json
+{
+  "operationId": "uuid",
+  "slotId": "3",
+  "operationType": "end",
+  "step": null,
+  "state": null,
+  "stdout": null,
+  "stderr": null,
+  "operationState": "FAILED",
+  "errorMessage": "Workspace operation in progress"
+}
+```
+
+The frontend SSE handler checks `step` first: if non-null, update the matching step in `_operation.steps`. If null, update `_operation.state` directly and display `errorMessage` as the failure reason.
 
 Frontend subscribes directly in `slot-detail.ts`'s `_subscribeEvents()` — add `lifecycle:progress` to the existing `EventSource` URL alongside `agent:state,agent:eviction`. This is a component-scoped subscription, NOT added to the global `ALL_WORKSPACE_TOPICS` in `workspace-sse.ts` (lifecycle progress is only relevant to the slot detail view).
 
