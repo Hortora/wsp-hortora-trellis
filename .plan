@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-87-lifecycle-progress-all-contexts
-state: scaffolded
+state: active
 project-sha: aa3d03a
 date: 2026-09-27
 issue-repo: Hortora/trellis
@@ -13,14 +13,14 @@ flyway-next-v: none
 
 ## Queue
 - [ ] hortora/trellis#87 — Issue #87 ← active
-  - [ ] Batch 1: Backend-identity
-    - [ ] Task 1: Create WorkContext sealed interface
-    - [ ] Task 2: Generalise OperationProgress and tracker
-  - [ ] Batch 2: Coordinator
-    - [ ] Task 3: Rename and generalise coordinator
-    - [ ] Task 4: Update REST executor and MCP
-  - [ ] Batch 3: Frontend
-    - [ ] Task 5: Extract lifecycle-progress component
-    - [ ] Task 6: Add lifecycle to repo-detail
-  - [ ] Batch 4: Docs
-    - [ ] Task 7: Update CLAUDE.md and full verification
+  - [x] Batch 1: Backend-identity
+    - [x] Task 1: Create WorkContext sealed interface
+    - [x] Task 2: Generalise OperationProgress and tracker
+  - [x] Batch 2: Coordinator
+    - [x] Task 3: Rename and generalise coordinator
+    - [x] Task 4: Update REST executor and MCP
+  - [x] Batch 3: Frontend
+    - [x] Task 5: Extract lifecycle-progress component
+    - [x] Task 6: Add lifecycle to repo-detail
+  - [x] Batch 4: Docs
+    - [x] Task 7: Update CLAUDE.md and full verification

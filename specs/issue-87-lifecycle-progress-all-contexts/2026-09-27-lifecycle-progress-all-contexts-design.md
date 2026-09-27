@@ -7,16 +7,38 @@
 
 Issue #68 implemented lifecycle step progress (end, pause, resume) with real-time SSE visibility, but scoped it exclusively to slots via `SlotAgentCoordinator`. Standalone repos — repos with active work but no slot — have no step progress visibility. This spec generalises the lifecycle progress infrastructure from slot-scoped to context-scoped, where a "context" is either a slot or a standalone repo.
 
-## Identity Model — `contextId`
+## Identity Model — `WorkContext`
 
-Replace the slot-specific `slotId` key with a unified `contextId` string throughout the stack:
+Replace the slot-specific `slotId` key with a sealed `WorkContext` interface that gives compile-time exhaustiveness in Java code, with a string `contextId` as the wire/storage representation:
 
-| Context type | `contextId` format | Agent lookup |
-|---|---|---|
-| Slot | `slot-{N}` (e.g. `slot-3`) | `terminalRegistry.list().filter(t -> slotId.equals(t.slot()))` |
-| Standalone repo | `repo-{repoName}` (e.g. `repo-engine`) | `terminalRegistry.list().filter(t -> repoName.equals(t.repo()))` |
+```java
+public sealed interface WorkContext {
+    record SlotContext(String slotId) implements WorkContext {}
+    record RepoContext(String repoName) implements WorkContext {}
 
-The `contextId` is an opaque token. The coordinator parses the prefix to determine context type and agent lookup strategy. One agent per standalone repo path (confirmed constraint).
+    default String key() {
+        return switch (this) {
+            case SlotContext s -> "slot-" + s.slotId();
+            case RepoContext r -> "repo-" + r.repoName();
+        };
+    }
+
+    static WorkContext parse(String contextId) {
+        if (contextId.startsWith("slot-")) return new SlotContext(contextId.substring(5));
+        if (contextId.startsWith("repo-")) return new RepoContext(contextId.substring(5));
+        throw new IllegalArgumentException("Unknown context type: " + contextId);
+    }
+}
+```
+
+| Context type | `WorkContext` record | `key()` wire format | Agent lookup |
+|---|---|---|---|
+| Slot | `SlotContext("3")` | `"slot-3"` | `terminalRegistry.list().filter(t -> slotId.equals(t.slot()))` |
+| Standalone repo | `RepoContext("engine")` | `"repo-engine"` | `terminalRegistry.list().filter(t -> repoName.equals(t.repo()) && t.slot() == null)` |
+
+**Two-layer identity:** `WorkContext` is the coordination/tracking identity (which terminals to manage, which operation to track). `workspaceRoot` is the execution identity (which directory to run scripts in). LifecycleManager only uses `workspaceRoot` — it has no knowledge of `WorkContext`. The coordinator bridges these layers.
+
+String `contextId` (`key()`) is used at wire boundaries: REST path params, SSE payloads, JSON-serialized `OperationProgress`, and frontend code. `WorkContext.parse()` converts from string to type at the system boundary (REST resource, JSON deserialization). Internal Java code uses the typed `WorkContext` throughout. One agent per standalone repo path (confirmed constraint).
 
 ## Backend Changes
 
@@ -52,60 +74,76 @@ Eviction, persistence, and startup recovery are unchanged — they operate on `o
 
 Rename the class to `LifecycleCoordinator` to reflect its broadened scope. IntelliJ rename refactor updates all references.
 
-**New helper method:**
+**New helper method — pattern match on `WorkContext`:**
 
 ```java
-private List<TerminalInfo> findTerminals(String contextId) {
-    if (contextId.startsWith("slot-")) {
-        var slotId = contextId.substring(5);
-        return terminalRegistry.list().stream()
-                .filter(t -> slotId.equals(t.slot()))
-                .toList();
-    } else if (contextId.startsWith("repo-")) {
-        var repoName = contextId.substring(5);
-        return terminalRegistry.list().stream()
-                .filter(t -> repoName.equals(t.repo()) && t.slot() == null)
-                .toList();
-    }
-    return List.of();
+private List<TerminalInfo> findTerminals(WorkContext ctx) {
+    return switch (ctx) {
+        case SlotContext s -> terminalRegistry.list().stream()
+            .filter(t -> s.slotId().equals(t.slot())).toList();
+        case RepoContext r -> terminalRegistry.list().stream()
+            .filter(t -> r.repoName().equals(t.repo()) && t.slot() == null).toList();
+    };
 }
 ```
 
-The `repo-*` branch guards with `t.slot() == null` — a repo inside a slot is owned by the slot context, not addressable as a standalone repo. Null-safe: `repoName.equals(t.repo())` since `t.repo()` can be null.
+Compile-time exhaustiveness: if a third context type is added, the compiler forces a new case. The `RepoContext` branch guards with `t.slot() == null` — a repo inside a slot is owned by the slot context, not addressable as a standalone repo. Null-safe: `r.repoName().equals(t.repo())` — the non-null record component drives the `equals()` call, so null `t.repo()` returns `false` without NPE.
 
-The three agent methods (`stopAllAgents`, `shutdownAgents`, `resumeCoordinatorPausedAgents`) call `findTerminals(contextId)` instead of each doing their own slot filter. Rename them to drop the "Slot" prefix.
+The three agent methods (`stopAllAgents`, `shutdownAgents`, `resumeCoordinatorPausedAgents`) call `findTerminals(ctx)` instead of each doing their own slot filter. Rename them to drop the "Slot" prefix.
 
-**Async methods** — parameter changes only:
+**Async methods** — accept typed `WorkContext`:
 
 ```java
-public OperationProgress coordinatedEndAsync(String contextId, Path workspaceRoot)
-public OperationProgress coordinatedPauseAsync(String contextId, Path workspaceRoot)
-public OperationProgress coordinatedResumeAsync(String contextId, Path workspaceRoot)
+public OperationProgress coordinatedEndAsync(WorkContext context, Path workspaceRoot)
+public OperationProgress coordinatedPauseAsync(WorkContext context, Path workspaceRoot)
+public OperationProgress coordinatedResumeAsync(WorkContext context, Path workspaceRoot)
 ```
 
-**Locking** — the `asyncSlotLocks` map becomes `asyncContextLocks`. Keyed on `contextId` — this naturally gives per-slot and per-repo mutual exclusion.
+Internally, these pass `context.key()` to `tracker.startOperation()` (which needs the string form for map keys and JSON persistence) and `context` to `findTerminals()`.
 
-**Sync methods** (`coordinatedEnd`, `coordinatedPause`, `coordinatedResume`) — same rename of parameter from `slotId` to `contextId`. The `slotLocks` map becomes `contextLocks`.
+**Locking** — the `asyncSlotLocks` map becomes `asyncContextLocks`. Keyed on `context.key()` — this naturally gives per-slot and per-repo mutual exclusion.
+
+**Sync methods** (`coordinatedEnd`, `coordinatedPause`, `coordinatedResume`) — accept `WorkContext context`. The `slotLocks` map becomes `contextLocks`, keyed on `context.key()`.
 
 ### LifecycleManager
 
-The async step methods (`endSteps`, `pauseSteps`, `resumeSteps`) accept `slotId` but don't use it — they only use `workspaceRoot` for locking and script execution. Rename the parameter to `contextId` for consistency but no logic change.
-
-The sync methods (`end`, `pause`, `resume`) — same parameter rename.
+LifecycleManager operates on `workspaceRoot` only — it has no knowledge of `WorkContext`. The `slotId` parameter on all methods (`end`, `pause`, `resume`, `endSteps`, `pauseSteps`, `resumeSteps`) is never referenced in the method bodies. Rename to `contextId` (string form, passed through from the coordinator for signature consistency) but no logic change. The coordinator bridges the two identity layers: it resolves `WorkContext` → terminals for agent management, then delegates to LifecycleManager with just `workspaceRoot` for script execution.
 
 ### LifecycleResource
 
-REST endpoints change from `/{slotId}` to `/{contextId}`:
+REST endpoints change from `/{slotId}` to `/{contextId}`. The resource parses the string path param into a typed `WorkContext` at the boundary:
+
+```java
+@POST
+@Path("/end/{contextId}")
+@Consumes(MediaType.APPLICATION_JSON)
+public Response end(@PathParam("contextId") String contextId, WorkspaceRequest req) {
+    try {
+        var ctx = WorkContext.parse(contextId);
+        var progress = coordinator.coordinatedEndAsync(ctx,
+                                                       java.nio.file.Path.of(req.workspaceRoot()));
+        return Response.accepted(progress).build();
+    } catch (IllegalArgumentException e) {
+        return Response.status(Response.Status.BAD_REQUEST)
+                       .entity(Map.of("error", e.getMessage())).build();
+    } catch (ConcurrentOperationException e) {
+        return Response.status(Response.Status.CONFLICT)
+                       .entity(Map.of("error", e.getMessage())).build();
+    }
+}
+```
+
+`WorkContext.parse()` is the single boundary where string→type conversion happens. Invalid context IDs (no recognised prefix) get HTTP 400. Same pattern for `pause` and `resume` endpoints.
 
 ```
-POST /api/lifecycle/end/{contextId}     -> coordinator.coordinatedEndAsync(contextId, ...)
-POST /api/lifecycle/pause/{contextId}   -> coordinator.coordinatedPauseAsync(contextId, ...)
-POST /api/lifecycle/resume/{contextId}  -> coordinator.coordinatedResumeAsync(contextId, ...)
+POST /api/lifecycle/end/{contextId}     -> WorkContext.parse() -> coordinator.coordinatedEndAsync(ctx, ...)
+POST /api/lifecycle/pause/{contextId}   -> WorkContext.parse() -> coordinator.coordinatedPauseAsync(ctx, ...)
+POST /api/lifecycle/resume/{contextId}  -> WorkContext.parse() -> coordinator.coordinatedResumeAsync(ctx, ...)
 GET  /api/lifecycle/operations/{operationId}          (unchanged)
 GET  /api/lifecycle/operations?context={contextId}    (was: ?slot={slotId})
 ```
 
-The `@PathParam` annotation changes from `slotId` to `contextId`. The query parameter on the GET endpoint changes from `slot` to `context`.
+The query parameter on the GET endpoint changes from `slot` to `context`. The GET endpoint uses the string form directly for tracker lookup (no parsing needed — the tracker maps by string key).
 
 ### Step definitions per context type
 
@@ -219,9 +257,9 @@ Add `lifecycle-progress.ts` to the webui build. Import in both `slot-detail.ts` 
 
 ## Edge Cases
 
-- **Standalone repo with no terminal/agent:** `findTerminals` returns empty list. Agent coordination step completes immediately (no agents to stop/shutdown/resume). Script steps run normally.
-- **Repo inside a slot:** `findTerminals("repo-engine")` filters by `t.repo().equals("engine") && t.slot() == null`. A terminal belonging to slot 3 working on repo "engine" is NOT matched — it is owned by the slot context (`slot-3`), not addressable as a standalone repo.
-- **contextId not recognised (no `slot-` or `repo-` prefix):** Coordinator returns HTTP 400 Bad Request.
+- **Standalone repo with no terminal/agent:** `findTerminals(RepoContext("engine"))` returns empty list. Agent coordination step completes immediately (no agents to stop/shutdown/resume). Script steps run normally.
+- **Repo inside a slot:** `findTerminals(RepoContext("engine"))` filters by `r.repoName().equals(t.repo()) && t.slot() == null`. A terminal belonging to slot 3 working on repo "engine" is NOT matched — it is owned by the slot context (`SlotContext("3")`), not addressable as a standalone repo.
+- **Invalid contextId string (no `slot-` or `repo-` prefix):** `WorkContext.parse()` throws `IllegalArgumentException`, resource returns HTTP 400 Bad Request.
 - **Repo on main branch:** `repo-detail.ts` hides lifecycle buttons when `repo.branch === 'main'`. No lifecycle operations are valid on main.
 - **SSE reconnection:** Parent re-fetches `GET /api/lifecycle/operations?context={contextId}` on EventSource reconnect, passes recovered state to `<lifecycle-progress>` component.
 - **Concurrent operations:** Same per-context Semaphore(1) as before, now keyed on `contextId`. HTTP 409 for conflicts.
@@ -238,9 +276,9 @@ Add `lifecycle-progress.ts` to the webui build. Import in both `slot-detail.ts` 
 - New: concurrent operations on `"slot-3"` and `"repo-engine"` are independent
 
 **LifecycleCoordinatorTest (renamed from SlotAgentCoordinatorTest):**
-- Existing tests updated: parameter rename, URL path update
-- New: `coordinatedEndAsync("repo-engine", workspaceRoot)` — finds terminal by repo name, executes steps
-- New: `coordinatedEndAsync("repo-engine", ...)` with no matching terminal — agent step completes immediately, script steps execute
+- Existing tests updated: pass `WorkContext.parse("slot-3")` instead of `"3"`, URL path update
+- New: `coordinatedEndAsync(new RepoContext("engine"), workspaceRoot)` — finds terminal by repo name, executes steps
+- New: `coordinatedEndAsync(new RepoContext("engine"), ...)` with no matching terminal — agent step completes immediately, script steps execute
 
 **LifecycleResourceTest:**
 - Existing tests updated: path param from `"3"` to `"slot-3"`, query param from `slot=3` to `context=slot-3`
