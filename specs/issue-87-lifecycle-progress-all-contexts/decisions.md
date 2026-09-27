@@ -22,3 +22,15 @@
 **Sources:** `SlotAgentCoordinator.java:21` (current class), `LifecycleResource.java:26` (injection site), `SlotAgentCoordinatorTest.java:21` (test class)
 **Exploration:** quick
 **Status:** captured
+
+## D3: REST endpoint structure
+
+**Choice:** Single endpoint with `contextId` path param — `/api/lifecycle/{end|pause|resume}/{contextId}`
+**Alternatives:**
+- Separate endpoint trees (`/api/lifecycle/slot/{slotId}/end`, `/api/lifecycle/repo/{repoName}/end`) — more REST-conventional but doubles endpoint count and requires two coordinator entry shapes
+**Rationale:** The `contextId` is the key abstraction from D1 — the endpoint should use it directly. Prefix parsing (`slot-` vs `repo-`) is trivial and contained in the coordinator. One code path, one entry point shape.
+**Trade-offs:** Backward-incompatible for slot-detail frontend — must update calls from `slotNumber` to `"slot-${slotNumber}"`. But it's code we control entirely.
+**Depends on:** D1 (contextId identity model)
+**Sources:** `LifecycleResource.java:42-79` (current `/{slotId}` endpoints), `slot-detail.ts:696-702` (current frontend calls)
+**Exploration:** quick
+**Status:** captured
