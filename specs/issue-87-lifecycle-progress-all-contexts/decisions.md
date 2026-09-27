@@ -46,3 +46,16 @@
 **Sources:** `SlotAgentCoordinator.java:205-252` (current slot-specific agent lookup methods), `TerminalInfo.java:3-10` (has both `slot` and `repo` fields)
 **Exploration:** quick
 **Status:** captured
+
+## D5: Frontend lifecycle UI sharing
+
+**Choice:** Extract a shared `<lifecycle-progress>` Lit component with `contextId` and `workspaceRoot` properties. Owns its own SSE subscription, event filtering, operation state, and rendering. Both `slot-detail.ts` and `repo-detail.ts` drop it into their sidebar.
+**Alternatives:**
+- Copy lifecycle code into repo-detail — fast but two copies to maintain, diverge over time
+- Lit mixin — awkward with `@state()` decorators and template composition, more ceremony than a component
+**Rationale:** The lifecycle section has clear inputs (contextId, workspaceRoot) and self-contained state (operation, expandedStep, SSE subscription). A component is the natural Lit pattern for this. Eliminates duplication and makes the lifecycle UI independently testable.
+**Trade-offs:** slot-detail.ts loses ~80 lines of inline lifecycle code which moves to a new file. Slight indirection — parent dispatches lifecycle actions, component renders progress. Parent needs to know when operation completes to refresh its own data (custom event or re-fetch on SSE completion).
+**Depends on:** D1 (contextId used as component property), D3 (single endpoint shape)
+**Sources:** `slot-detail.ts:460-493` (`_renderLifecycle`), `slot-detail.ts:261-310` (SSE subscription + event handling), `slot-detail.ts:69-84` (TS interfaces)
+**Exploration:** quick
+**Status:** captured
