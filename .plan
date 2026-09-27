@@ -1,0 +1,19 @@
+# Work Plan — issue-52-small-issues-batch
+
+## State
+branch: issue-52-small-issues-batch
+state: scaffolded
+project-sha: bf39b24
+date: 2026-09-28
+issue-repo: Hortora/trellis
+covers: 52,72,81,78,85
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#52 — Issue #52 ← active
+- [ ] hortora/trellis#72 — Backlog panel multi-select repo filter
+- [ ] hortora/trellis#81 — Additional REPL goal definitions
+- [ ] hortora/trellis#78 — Standalone isx command namespace in REPL
+- [ ] hortora/trellis#85 — Playwright e2e test helper for xterm
