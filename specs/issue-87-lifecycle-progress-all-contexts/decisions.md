@@ -34,3 +34,15 @@
 **Sources:** `LifecycleResource.java:42-79` (current `/{slotId}` endpoints), `slot-detail.ts:696-702` (current frontend calls)
 **Exploration:** quick
 **Status:** captured
+
+## D4: Agent lookup strategy in the coordinator
+
+**Choice:** Single `findTerminals(String contextId)` helper method that switches on prefix — `slot-*` filters by `t.slot()`, `repo-*` filters by `t.repo()`
+**Alternatives:**
+- Strategy pattern with `ContextResolver` interface and per-type implementations — over-engineered for a two-variant switch on a string prefix
+**Rationale:** The prefix switch is two branches. A helper method that returns a filtered terminal list keeps the coordinator simple. The three agent methods (`stopAll`, `shutdown`, `resume`) all call the same helper instead of each doing their own slot filter.
+**Trade-offs:** If more context types are added later, the switch grows — but that's a bridge to cross then, not now
+**Depends on:** D1 (contextId identity model)
+**Sources:** `SlotAgentCoordinator.java:205-252` (current slot-specific agent lookup methods), `TerminalInfo.java:3-10` (has both `slot` and `repo` fields)
+**Exploration:** quick
+**Status:** captured
