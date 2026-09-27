@@ -1,0 +1,27 @@
+# Work Plan — issue-87-lifecycle-progress-all-contexts
+
+## State
+branch: issue-87-lifecycle-progress-all-contexts
+state: closing:promoted
+project-sha: aa3d03a
+date: 2026-09-27
+issue-repo: Hortora/trellis
+covers: 87
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+evidence-era: true
+## Queue
+- [ ] hortora/trellis#87 — Issue #87 ← active
+  - [x] Batch 1: Backend-identity
+    - [x] Task 1: Create WorkContext sealed interface
+    - [x] Task 2: Generalise OperationProgress and tracker
+  - [x] Batch 2: Coordinator
+    - [x] Task 3: Rename and generalise coordinator
+    - [x] Task 4: Update REST executor and MCP
+  - [x] Batch 3: Frontend
+    - [x] Task 5: Extract lifecycle-progress component
+    - [x] Task 6: Add lifecycle to repo-detail
+  - [x] Batch 4: Docs
+    - [x] Task 7: Update CLAUDE.md and full verification
