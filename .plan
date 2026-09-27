@@ -13,3 +13,14 @@ flyway-next-v: none
 
 ## Queue
 - [ ] hortora/trellis#87 — Issue #87 ← active
+  - [ ] Batch 1: Backend-identity
+    - [ ] Task 1: Create WorkContext sealed interface
+    - [ ] Task 2: Generalise OperationProgress and tracker
+  - [ ] Batch 2: Coordinator
+    - [ ] Task 3: Rename and generalise coordinator
+    - [ ] Task 4: Update REST executor and MCP
+  - [ ] Batch 3: Frontend
+    - [ ] Task 5: Extract lifecycle-progress component
+    - [ ] Task 6: Add lifecycle to repo-detail
+  - [ ] Batch 4: Docs
+    - [ ] Task 7: Update CLAUDE.md and full verification
