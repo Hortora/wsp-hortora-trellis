@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-87-lifecycle-progress-all-contexts
-state: closing:review
+state: closing:verified
 project-sha: aa3d03a
 date: 2026-09-27
 issue-repo: Hortora/trellis
