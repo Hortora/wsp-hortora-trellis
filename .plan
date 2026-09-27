@@ -1,0 +1,15 @@
+# Work Plan — issue-87-lifecycle-progress-all-contexts
+
+## State
+branch: issue-87-lifecycle-progress-all-contexts
+state: scaffolded
+project-sha: aa3d03a
+date: 2026-09-27
+issue-repo: Hortora/trellis
+covers: 87
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: none
+
+## Queue
+- [ ] hortora/trellis#87 — Issue #87 ← active
