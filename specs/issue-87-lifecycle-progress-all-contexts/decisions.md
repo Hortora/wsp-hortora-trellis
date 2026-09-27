@@ -37,10 +37,10 @@
 
 ## D4: Agent lookup strategy in the coordinator
 
-**Choice:** Single `findTerminals(String contextId)` helper method that switches on prefix — `slot-*` filters by `t.slot()`, `repo-*` filters by `t.repo()`
+**Choice:** Single `findTerminals(String contextId)` helper method that switches on prefix — `slot-*` filters by `t.slot()`, `repo-*` filters by `t.repo()` with `slot == null` guard
 **Alternatives:**
 - Strategy pattern with `ContextResolver` interface and per-type implementations — over-engineered for a two-variant switch on a string prefix
-**Rationale:** The prefix switch is two branches. A helper method that returns a filtered terminal list keeps the coordinator simple. The three agent methods (`stopAll`, `shutdown`, `resume`) all call the same helper instead of each doing their own slot filter.
+**Rationale:** The prefix switch is two branches. A helper method that returns a filtered terminal list keeps the coordinator simple. The three agent methods (`stopAll`, `shutdown`, `resume`) all call the same helper instead of each doing their own slot filter. The `repo-*` branch filters `t.repo().equals(repoName) && t.slot() == null` — a repo inside a slot is owned by the slot context, not addressable as a standalone repo. Null-safe: `repoName.equals(t.repo())` since `t.repo()` can be null.
 **Trade-offs:** If more context types are added later, the switch grows — but that's a bridge to cross then, not now
 **Depends on:** D1 (contextId identity model)
 **Sources:** `SlotAgentCoordinator.java:205-252` (current slot-specific agent lookup methods), `TerminalInfo.java:3-10` (has both `slot` and `repo` fields)
@@ -49,13 +49,14 @@
 
 ## D5: Frontend lifecycle UI sharing
 
-**Choice:** Extract a shared `<lifecycle-progress>` Lit component with `contextId` and `workspaceRoot` properties. Owns its own SSE subscription, event filtering, operation state, and rendering. Both `slot-detail.ts` and `repo-detail.ts` drop it into their sidebar.
+**Choice:** Extract a shared `<lifecycle-progress>` Lit component as a pure rendering component — receives `operation` as a property from the parent, dispatches `lifecycle-complete` event upward. Parent owns the SSE subscription and passes operation state down.
 **Alternatives:**
+- Component-owned SSE subscription — creates duplicate EventSource connections (parent already subscribes to agent:state + lifecycle:progress). Wastes connections and creates coordination problems.
 - Copy lifecycle code into repo-detail — fast but two copies to maintain, diverge over time
 - Lit mixin — awkward with `@state()` decorators and template composition, more ceremony than a component
-**Rationale:** The lifecycle section has clear inputs (contextId, workspaceRoot) and self-contained state (operation, expandedStep, SSE subscription). A component is the natural Lit pattern for this. Eliminates duplication and makes the lifecycle UI independently testable.
-**Trade-offs:** slot-detail.ts loses ~80 lines of inline lifecycle code which moves to a new file. Slight indirection — parent dispatches lifecycle actions, component renders progress. Parent needs to know when operation completes to refresh its own data (custom event or re-fetch on SSE completion).
-**Depends on:** D1 (contextId used as component property), D3 (single endpoint shape)
+**Rationale:** Follows Lit's unidirectional data flow model. Parent keeps a single EventSource for all topics, passes operation state as a property. Component is pure rendering — no SSE, no fetch, just template + styles. Eliminates duplication without adding connections.
+**Trade-offs:** slot-detail.ts loses ~80 lines of inline lifecycle rendering which moves to a new file. Parent retains SSE handling and operation state management. repo-detail.ts needs to add SSE subscription for `lifecycle:progress` topic.
+**Depends on:** D1 (contextId used for filtering), D3 (single endpoint shape)
 **Sources:** `slot-detail.ts:460-493` (`_renderLifecycle`), `slot-detail.ts:261-310` (SSE subscription + event handling), `slot-detail.ts:69-84` (TS interfaces)
 **Exploration:** quick
-**Status:** captured
+**Status:** revised — SSE ownership moved to parent per decision review finding

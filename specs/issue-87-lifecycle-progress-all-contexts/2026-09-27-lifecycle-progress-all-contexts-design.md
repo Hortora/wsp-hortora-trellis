@@ -64,12 +64,14 @@ private List<TerminalInfo> findTerminals(String contextId) {
     } else if (contextId.startsWith("repo-")) {
         var repoName = contextId.substring(5);
         return terminalRegistry.list().stream()
-                .filter(t -> repoName.equals(t.repo()))
+                .filter(t -> repoName.equals(t.repo()) && t.slot() == null)
                 .toList();
     }
     return List.of();
 }
 ```
+
+The `repo-*` branch guards with `t.slot() == null` — a repo inside a slot is owned by the slot context, not addressable as a standalone repo. Null-safe: `repoName.equals(t.repo())` since `t.repo()` can be null.
 
 The three agent methods (`stopAllAgents`, `shutdownAgents`, `resumeCoordinatorPausedAgents`) call `findTerminals(contextId)` instead of each doing their own slot filter. Rename them to drop the "Slot" prefix.
 
@@ -127,7 +129,7 @@ Step name singularity (`stop-agent` vs `stop-agents`) is cosmetic — the coordi
 
 ### `lifecycle-progress.ts` — new shared component
 
-Extract lifecycle progress rendering into a self-contained Lit component:
+Pure rendering component — receives operation state from the parent, renders the step progress section. No SSE subscription, no fetch. Parents own the SSE connection and pass operation state as a property.
 
 ```typescript
 interface StepProgress {
@@ -149,91 +151,67 @@ interface OperationProgress {
 
 @customElement('lifecycle-progress')
 export class LifecycleProgress extends LitElement {
-  @property() contextId = '';
-  @property() workspaceRoot = '';
-
-  @state() private _operation: OperationProgress | null = null;
+  @property({ type: Object }) operation: OperationProgress | null = null;
   @state() private _expandedStep: string | null = null;
-
-  private _eventSource: EventSource | null = null;
 }
 ```
 
 **Responsibilities:**
-- Subscribe to `lifecycle:progress` SSE topic, filter events by `contextId`
-- On `connectedCallback`: fetch `GET /api/lifecycle/operations?context={contextId}` to restore state after page refresh
-- On SSE event: update `_operation` step states (same logic as current `_handleLifecycleEvent`)
-- On operation complete/fail: dispatch a `lifecycle-complete` custom event so the parent can refresh its data
-- After COMPLETED: keep visible for 10 seconds, then clear `_operation`
 - Render the lifecycle section (same template as current `_renderLifecycle()`)
-- On `disconnectedCallback`: close EventSource
+- Manage expand/collapse state for step output (`_expandedStep`)
+- Return `nothing` when `operation` is null
 
 **Styles:** Move the lifecycle-specific CSS (step icons, spinner, output area) from `slot-detail.ts` into the component.
 
-**Public method for triggering actions:**
-
-```typescript
-async startAction(name: string, url: string): Promise<void> {
-  this._expandedStep = null;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceRoot: this.workspaceRoot }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.error ?? `${name} failed: HTTP ${res.status}`);
-  }
-  this._operation = await res.json() as OperationProgress;
-}
-
-get actionInProgress(): boolean {
-  return this._operation?.state === 'RUNNING';
-}
-```
-
-Parents call `this._lifecycleProgress.startAction('end', '/api/lifecycle/end/slot-3')` and handle errors. The component owns the progress state from that point.
+The `StepProgress` and `OperationProgress` interfaces are exported from this file and imported by both parents.
 
 ### `slot-detail.ts` changes
 
-- Remove `_operation`, `_expandedStep`, `_renderLifecycle()`, `_handleLifecycleEvent()`, `StepProgress` and `OperationProgress` interfaces
-- Remove `lifecycle:progress` from the direct EventSource subscription (the component owns this now)
-- Add a `lifecycle-progress` element reference via `@query('lifecycle-progress')`
+- Remove `_renderLifecycle()` template (moves to component)
+- Keep `_operation`, `_handleLifecycleEvent()`, and `lifecycle:progress` in the existing EventSource subscription — parent owns SSE and operation state
 - In `_renderSidebar()`, replace `${this._renderLifecycle()}` with:
   ```typescript
-  html`<lifecycle-progress
-    contextId="slot-${this.slotNumber}"
-    .workspaceRoot=${this.workspaceRoot}
-    @lifecycle-complete=${() => { this._loadSlot(); this._loadTerminals(); }}
-  ></lifecycle-progress>`
+  html`<lifecycle-progress .operation=${this._operation}></lifecycle-progress>`
   ```
-- `_lifecycleAction()` calls `this._lifecycleProgress.startAction(name, url)` with the updated URL path using `slot-${this.slotNumber}`
-- `_actionInProgress` checks `this._lifecycleProgress?.actionInProgress` for button disabling
+- `_lifecycleAction()` updates URL path to use `slot-${this.slotNumber}` as the contextId
+- On operation complete/fail (in `_handleLifecycleEvent`): same logic as today — clear `_actionInProgress`, reload slot/terminals, auto-dismiss after 10s
 
 ### `repo-detail.ts` changes
 
 - Add lifecycle buttons to `_renderToolbar()` — `pause` and `end` buttons, shown only when `repo.branch !== 'main'`
+- Add `_operation` state, `_actionInProgress` state
+- Add `lifecycle:progress` to the existing EventSource subscription in `_subscribeEvents()` (currently subscribes to `agent:state` only)
+- Add `_handleLifecycleEvent(data)` — same logic as slot-detail, filtering by `contextId === "repo-${this.repoName}"`
 - Add `lifecycle-progress` element to `_renderSidebar()`:
   ```typescript
-  html`<lifecycle-progress
-    contextId="repo-${this.repoName}"
-    .workspaceRoot=${this.workspaceRoot}
-    @lifecycle-complete=${() => { this._loadRepo(); this._loadTerminal(); }}
-  ></lifecycle-progress>`
+  html`<lifecycle-progress .operation=${this._operation}></lifecycle-progress>`
   ```
-- Add `_lifecycleAction()` method (same pattern as slot-detail):
+- Add `_lifecycleAction()` method:
   ```typescript
   private async _lifecycleAction(name: string) {
+    this._actionInProgress = name;
     try {
-      const el = this.renderRoot.querySelector('lifecycle-progress') as LifecycleProgress;
-      await el.startAction(name, `/api/lifecycle/${name}/repo-${this.repoName}`);
+      const res = await fetch(`/api/lifecycle/${name}/repo-${this.repoName}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceRoot: this.workspaceRoot }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        this._error = body?.error ?? `${name} failed: HTTP ${res.status}`;
+        this._actionInProgress = null;
+        return;
+      }
+      this._operation = await res.json() as OperationProgress;
     } catch (e) {
-      this._error = String(e);
+      this._error = `${name} failed: ${e}`;
+      this._actionInProgress = null;
     }
   }
   ```
 - Wire toolbar buttons: `@click=${() => this._lifecycleAction('end')}`, `@click=${() => this._lifecycleAction('pause')}`
-- Button disable state: query the component's `actionInProgress` getter
+- On operation complete/fail (in `_handleLifecycleEvent`): clear `_actionInProgress`, reload repo/terminal, auto-dismiss after 10s
+- On `connectedCallback`: fetch `GET /api/lifecycle/operations?context=repo-${this.repoName}` to restore state after page refresh
 
 ### Component registration
 
@@ -242,9 +220,10 @@ Add `lifecycle-progress.ts` to the webui build. Import in both `slot-detail.ts` 
 ## Edge Cases
 
 - **Standalone repo with no terminal/agent:** `findTerminals` returns empty list. Agent coordination step completes immediately (no agents to stop/shutdown/resume). Script steps run normally.
+- **Repo inside a slot:** `findTerminals("repo-engine")` filters by `t.repo().equals("engine") && t.slot() == null`. A terminal belonging to slot 3 working on repo "engine" is NOT matched — it is owned by the slot context (`slot-3`), not addressable as a standalone repo.
 - **contextId not recognised (no `slot-` or `repo-` prefix):** Coordinator returns HTTP 400 Bad Request.
 - **Repo on main branch:** `repo-detail.ts` hides lifecycle buttons when `repo.branch === 'main'`. No lifecycle operations are valid on main.
-- **SSE reconnection:** The component re-fetches `GET /api/lifecycle/operations?context={contextId}` on EventSource reconnect (same as current slot-detail behavior).
+- **SSE reconnection:** Parent re-fetches `GET /api/lifecycle/operations?context={contextId}` on EventSource reconnect, passes recovered state to `<lifecycle-progress>` component.
 - **Concurrent operations:** Same per-context Semaphore(1) as before, now keyed on `contextId`. HTTP 409 for conflicts.
 - **Existing persisted operations with `slotId`:** On startup, `LifecycleOperationTracker.loadOnStartup()` reads JSON files. Existing files use `slotId` field name. Jackson deserialization will fail on the renamed field. Add `@JsonAlias("slotId")` on the `contextId` parameter in `OperationProgress` for backward compatibility during the transition. Old files will be evicted within 1 hour (FAILED_TTL).
 
