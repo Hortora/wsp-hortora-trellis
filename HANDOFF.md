@@ -2,11 +2,11 @@
 
 ## Last Session
 
-Closed #86 (terminal lifecycle stability). Three layers: configure guard + reconnect cap in vendored pages-component-terminal, refreshAgent lock + verifyShellForeground in AgentProcessManager, state separation (_terminalName vs _agentState) + focus simplification in repo-detail and slot-detail. Also closed #84 (already fixed). 5 decisions, 6 tasks, 3 batches, all landed.
+Closed #68 (slot lifecycle step progress). Built async lifecycle operations with real-time step-by-step progress in the slot detail modal — `LifecycleOperationTracker` with file-backed durability, SSE streaming via `lifecycle:progress` topic, `Semaphore(1)` for cross-thread locking. Code review caught a contract mismatch (`_nextEpic` calling the updated async `_lifecycleAction`), startup recovery wiring gap, and a 204 no-content issue — all fixed. 7 decisions, 3-round spec review, 6 tasks, 3 batches. Filed #87 after recognising the design is slot-scoped when it should be workspace/repo-scoped.
 
 ## Immediate Next Step
 
-#68 — Slot modal: show work lifecycle steps and captured output. Display current lifecycle step progress (work-end review/squash/push, work-start scaffold) with step list and captured output in the slot detail modal.
+#87 — Lifecycle step progress for all work contexts (standalone repos, single-repo slots). The async orchestration path and frontend progress UI need to work for any work context, not just slots. Core refactoring: `SlotAgentCoordinator` → workspace-scoped coordinator, `repo-detail.ts` gets the same lifecycle sidebar section.
 
 ## Cross-Module
 
@@ -15,5 +15,5 @@ Closed #86 (terminal lifecycle stability). Three layers: configure guard + recon
 
 ## References
 
-- Design spec: `docs/specs/issue-86-terminal-lifecycle/2026-09-25-terminal-lifecycle-design.md`
-- Plan: `plans/2026-09-25-terminal-lifecycle.md`
+- Design spec: `docs/specs/issue-68-slot-lifecycle-steps/2026-09-26-slot-lifecycle-steps-design.md`
+- Diary: `blog/2026-09-26-mdp01-making-lifecycle-operations-visible.md`
