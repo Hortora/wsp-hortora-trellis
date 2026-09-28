@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-52-small-issues-batch
-state: active
+state: closing:review
 project-sha: bf39b24
 date: 2026-09-28
 issue-repo: Hortora/trellis
@@ -11,6 +11,7 @@ design-repo: workspace
 design-section-hashes: 
 flyway-next-v: none
 
+evidence-era: true
 ## Queue
 - [x] hortora/trellis#52 — Issue #52
 - [x] hortora/trellis#72 — Backlog panel multi-select repo filter
