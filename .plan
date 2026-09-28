@@ -12,8 +12,8 @@ design-section-hashes:
 flyway-next-v: none
 
 ## Queue
-- [ ] hortora/trellis#52 — Issue #52 ← active
-- [ ] hortora/trellis#72 — Backlog panel multi-select repo filter
-- [ ] hortora/trellis#81 — Additional REPL goal definitions
-- [ ] hortora/trellis#78 — Standalone isx command namespace in REPL
-- [ ] hortora/trellis#85 — Playwright e2e test helper for xterm
+- [x] hortora/trellis#52 — Issue #52
+- [x] hortora/trellis#72 — Backlog panel multi-select repo filter
+- [x] hortora/trellis#81 — Additional REPL goal definitions
+- [x] hortora/trellis#78 — Standalone isx command namespace in REPL
+- [x] hortora/trellis#85 — Playwright e2e test helper for xterm
