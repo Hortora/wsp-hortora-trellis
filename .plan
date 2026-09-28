@@ -2,7 +2,7 @@
 
 ## State
 branch: issue-52-small-issues-batch
-state: closing:review
+state: closing:verified
 project-sha: bf39b24
 date: 2026-09-28
 issue-repo: Hortora/trellis
