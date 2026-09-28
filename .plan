@@ -1,0 +1,15 @@
+# Work Plan — issue-71-backlog-tree-table-epic
+
+## State
+branch: issue-71-backlog-tree-table-epic
+state: scaffolded
+project-sha: 
+date: 
+issue-repo: Hortora/trellis
+covers: 71
+design-repo: workspace
+design-section-hashes: 
+flyway-next-v: 
+
+## Queue
+- [ ] hortora/trellis#71 — Issue #71 ← active
